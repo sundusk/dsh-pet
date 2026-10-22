@@ -52,6 +52,7 @@ sips -z 512 512 "$ICON_SOURCE" --out "$ICONSET_DIR/icon_512x512.png" >/dev/null
 sips -z 1024 1024 "$ICON_SOURCE" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null
 
 iconutil -c icns "$ICONSET_DIR" -o "$APP_DIR/Contents/Resources/DSHPet.icns"
+cp Resources/ThirdPartyNotices.txt "$APP_DIR/Contents/Resources/ThirdPartyNotices.txt"
 
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

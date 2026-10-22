@@ -144,6 +144,8 @@ pnpm dsh plugin --profile web add github:sundusk/dsh-pet
 
 ### 菜单栏图标功能
 
+菜单栏采用 [DeepSeek Harness 官方 FishLogo](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-primitives/src/FishLogo.tsx) 的单色轮廓，自动适配深浅背景。悬停可查看当前状态，展开菜单可查看状态文字与状态色点。素材来源与许可随 App 一同附在 `ThirdPartyNotices.txt` 中。
+
 | 菜单项 | 功能 |
 |---|---|
 | 状态文字 | 当前连接状态、状态名与桥接方式（如「已连接 · 工具调用 · 本地桥接」） |

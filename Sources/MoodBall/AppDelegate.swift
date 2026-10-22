@@ -857,15 +857,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
     }
 
-    // MARK: - 菜单栏图标（NSStatusItem，非模板彩色渲染）
+    // MARK: - 菜单栏图标
 
     /// 创建菜单栏常驻图标。
-    /// 注意：SwiftUI 的 `MenuBarExtra` 会把 label 强制渲染成单色模板图片，
-    /// mood 颜色会丢失（看起来就是个黑点/白点），所以这里改用 AppKit 的
-    /// `NSStatusItem` + 自绘非模板图片，让圆球真正显示 mood 颜色。
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem = item
+        item.button?.image = Self.makeStatusIcon()
+        item.button?.imagePosition = .imageOnly
 
         // 菜单内容：状态行 + 显示/隐藏 + 设置… + 退出（与旧 MenuBarContent 一致）
         let menu = NSMenu()
@@ -883,11 +882,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         menu.addItem(togglePetMenuItem!)
 
-        menu.addItem(makeShortcutMenuItem(
-            action: .openHarness,
-            title: "打开 Harness",
-            selector: #selector(openHarnessFromMenu)
-        ))
         menu.addItem(makeShortcutMenuItem(
             action: .openSettings,
             title: "设置…",
@@ -919,13 +913,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let item = statusItem else { return }
         let color = model.color
 
-        // 颜色变化才重绘图片（轮询会高频触发 objectWillChange，避免每次都重建 NSImage）
+        // The template glyph stays fixed; only the menu's state dot changes color.
         if lastIconColor != color {
             lastIconColor = color
-            let image = Self.makeStatusIcon(color: color)
-            item.button?.image = image
-            item.button?.image?.isTemplate = false
-            item.button?.imagePosition = .imageOnly
             statusHeaderItem?.image = Self.makeColoredDot(color: color, size: 10)
         }
 
@@ -1010,25 +1000,103 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 自绘菜单栏图标：mood 颜色圆球 + 两只镂空小圆点眼睛（非模板图片）。
-    /// `isTemplate = false`：不参与系统的模板染色，按原样显示。
-    private static func makeStatusIcon(color: Color, size: CGFloat = 22) -> NSImage {
-        NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+    /// Official DeepSeek Harness FishLogo geometry (MIT); see ThirdPartyNotices.txt.
+    /// Source blob: 8621f17273c0d192feb14a988816c8052360b908
+    static func makeStatusIcon() -> NSImage {
+        let image = NSImage(size: NSSize(width: 22, height: 22), flipped: false) { rect in
             let path = NSBezierPath()
-            // 圆球
-            path.appendOval(in: rect.insetBy(dx: size * 0.08, dy: size * 0.08))
-            // 两只镂空竖向椭圆眼睛：even-odd 填充把椭圆挖成透明
-            let eyeW = size * 0.10
-            let eyeH = size * 0.20
-            let eyeGap = size * 0.16
-            let eyeY = rect.midY - eyeH / 2
-            path.appendOval(in: CGRect(x: rect.midX - eyeGap - eyeW / 2, y: eyeY, width: eyeW, height: eyeH))
-            path.appendOval(in: CGRect(x: rect.midX + eyeGap - eyeW / 2, y: eyeY, width: eyeW, height: eyeH))
-            path.windingRule = .evenOdd
-            NSColor(color).setFill()
+            path.move(to: NSPoint(x: 22.9168, y: 1.43018))
+            path.curve(to: NSPoint(x: 22.4223, y: 1.65519), controlPoint1: NSPoint(x: 22.6713, y: 1.31018), controlPoint2: NSPoint(x: 22.5658, y: 1.53918))
+            path.curve(to: NSPoint(x: 22.2903, y: 1.78669), controlPoint1: NSPoint(x: 22.3733, y: 1.69269), controlPoint2: NSPoint(x: 22.3318, y: 1.74169))
+            path.curve(to: NSPoint(x: 20.9657, y: 2.39121), controlPoint1: NSPoint(x: 21.9317, y: 2.1697), controlPoint2: NSPoint(x: 21.5127, y: 2.42121))
+            path.curve(to: NSPoint(x: 18.8787, y: 3.20973), controlPoint1: NSPoint(x: 20.1657, y: 2.34621), controlPoint2: NSPoint(x: 19.4827, y: 2.59771))
+            path.curve(to: NSPoint(x: 17.6746, y: 1.71569), controlPoint1: NSPoint(x: 18.7502, y: 2.45521), controlPoint2: NSPoint(x: 18.3236, y: 2.0047))
+            path.curve(to: NSPoint(x: 16.7536, y: 1.08867), controlPoint1: NSPoint(x: 17.3351, y: 1.56568), controlPoint2: NSPoint(x: 16.9916, y: 1.41518))
+            path.curve(to: NSPoint(x: 16.4591, y: 0.341647), controlPoint1: NSPoint(x: 16.5876, y: 0.856163), controlPoint2: NSPoint(x: 16.5421, y: 0.597155))
+            path.curve(to: NSPoint(x: 16.1761, y: 0.00363739), controlPoint1: NSPoint(x: 16.4061, y: 0.187643), controlPoint2: NSPoint(x: 16.3536, y: 0.0301382))
+            path.curve(to: NSPoint(x: 15.8326, y: 0.270145), controlPoint1: NSPoint(x: 15.9836, y: -0.0263635), controlPoint2: NSPoint(x: 15.9081, y: 0.135141))
+            path.curve(to: NSPoint(x: 15.4251, y: 2.0462), controlPoint1: NSPoint(x: 15.5306, y: 0.822162), controlPoint2: NSPoint(x: 15.4136, y: 1.43018))
+            path.curve(to: NSPoint(x: 17.1991, y: 5.3203), controlPoint1: NSPoint(x: 15.4516, y: 3.43174), controlPoint2: NSPoint(x: 16.0366, y: 4.53527))
+            path.curve(to: NSPoint(x: 17.3236, y: 5.63181), controlPoint1: NSPoint(x: 17.3311, y: 5.4103), controlPoint2: NSPoint(x: 17.3651, y: 5.5003))
+            path.curve(to: NSPoint(x: 17.0671, y: 6.43533), controlPoint1: NSPoint(x: 17.2441, y: 5.90231), controlPoint2: NSPoint(x: 17.1501, y: 6.16482))
+            path.curve(to: NSPoint(x: 16.7501, y: 6.57033), controlPoint1: NSPoint(x: 17.0141, y: 6.60784), controlPoint2: NSPoint(x: 16.9351, y: 6.64584))
+            path.curve(to: NSPoint(x: 15.074, y: 5.4328), controlPoint1: NSPoint(x: 16.1121, y: 6.30383), controlPoint2: NSPoint(x: 15.5611, y: 5.90931))
+            path.curve(to: NSPoint(x: 12.568, y: 3.05973), controlPoint1: NSPoint(x: 14.2475, y: 4.63328), controlPoint2: NSPoint(x: 13.5, y: 3.75075))
+            path.curve(to: NSPoint(x: 11.9034, y: 2.60522), controlPoint1: NSPoint(x: 12.349, y: 2.89822), controlPoint2: NSPoint(x: 12.13, y: 2.74822))
+            path.curve(to: NSPoint(x: 12.277, y: 0.833162), controlPoint1: NSPoint(x: 10.9524, y: 1.68169), controlPoint2: NSPoint(x: 12.028, y: 0.923165))
+            path.curve(to: NSPoint(x: 11.5259, y: 0.42015), controlPoint1: NSPoint(x: 12.5375, y: 0.739159), controlPoint2: NSPoint(x: 12.3675, y: 0.41615))
+            path.curve(to: NSPoint(x: 8.93286, y: 1.08117), controlPoint1: NSPoint(x: 10.6844, y: 0.42365), controlPoint2: NSPoint(x: 9.91439, y: 0.705658))
+            path.curve(to: NSPoint(x: 8.48384, y: 1.21267), controlPoint1: NSPoint(x: 8.78935, y: 1.13767), controlPoint2: NSPoint(x: 8.63835, y: 1.17867))
+            path.curve(to: NSPoint(x: 5.70226, y: 1.11517), controlPoint1: NSPoint(x: 7.59332, y: 1.04367), controlPoint2: NSPoint(x: 6.66829, y: 1.00617))
+            path.curve(to: NSPoint(x: 1.36213, y: 3.64575), controlPoint1: NSPoint(x: 3.88321, y: 1.31768), controlPoint2: NSPoint(x: 2.43016, y: 2.1777))
+            path.curve(to: NSPoint(x: 0.146595, y: 9.50642), controlPoint1: NSPoint(x: 0.0790928, y: 5.4103), controlPoint2: NSPoint(x: -0.222916, y: 7.41536))
+            path.curve(to: NSPoint(x: 3.38869, y: 14.9616), controlPoint1: NSPoint(x: 0.535106, y: 11.7105), controlPoint2: NSPoint(x: 1.66014, y: 13.535))
+            path.curve(to: NSPoint(x: 9.60138, y: 17.0266), controlPoint1: NSPoint(x: 5.18125, y: 16.4406), controlPoint2: NSPoint(x: 7.24581, y: 17.1657))
+            path.curve(to: NSPoint(x: 14.421, y: 15.2321), controlPoint1: NSPoint(x: 11.0319, y: 16.9441), controlPoint2: NSPoint(x: 12.6245, y: 16.7526))
+            path.curve(to: NSPoint(x: 16.1381, y: 15.6151), controlPoint1: NSPoint(x: 14.874, y: 15.4576), controlPoint2: NSPoint(x: 15.3496, y: 15.5476))
+            path.curve(to: NSPoint(x: 17.7836, y: 15.4911), controlPoint1: NSPoint(x: 16.7456, y: 15.6716), controlPoint2: NSPoint(x: 17.3306, y: 15.5851))
+            path.curve(to: NSPoint(x: 18.1876, y: 14.5636), controlPoint1: NSPoint(x: 18.4931, y: 15.3411), controlPoint2: NSPoint(x: 18.4441, y: 14.6841))
+            path.curve(to: NSPoint(x: 16.1496, y: 13.67), controlPoint1: NSPoint(x: 16.1081, y: 13.595), controlPoint2: NSPoint(x: 16.5646, y: 13.9891))
+            path.curve(to: NSPoint(x: 19.3182, y: 7.17235), controlPoint1: NSPoint(x: 17.2061, y: 12.42), controlPoint2: NSPoint(x: 18.8202, y: 10.1979))
+            path.curve(to: NSPoint(x: 19.4222, y: 6.09732), controlPoint1: NSPoint(x: 19.3672, y: 6.83834), controlPoint2: NSPoint(x: 19.4297, y: 6.36783))
+            path.curve(to: NSPoint(x: 19.6447, y: 5.84931), controlPoint1: NSPoint(x: 19.4182, y: 5.93231), controlPoint2: NSPoint(x: 19.4562, y: 5.86831))
+            path.curve(to: NSPoint(x: 21.1357, y: 5.3913), controlPoint1: NSPoint(x: 20.1657, y: 5.78931), controlPoint2: NSPoint(x: 20.6712, y: 5.64681))
+            path.curve(to: NSPoint(x: 23.1548, y: 1.9972), controlPoint1: NSPoint(x: 22.4833, y: 4.65528), controlPoint2: NSPoint(x: 23.0268, y: 3.44624))
+            path.curve(to: NSPoint(x: 22.9168, y: 1.43018), controlPoint1: NSPoint(x: 23.1738, y: 1.77569), controlPoint2: NSPoint(x: 23.1508, y: 1.54668))
+            path.close()
+            path.move(to: NSPoint(x: 11.1749, y: 14.4736))
+            path.curve(to: NSPoint(x: 7.77832, y: 12.39), controlPoint1: NSPoint(x: 9.15936, y: 12.889), controlPoint2: NSPoint(x: 8.18184, y: 12.3675))
+            path.curve(to: NSPoint(x: 7.55182, y: 13.126), controlPoint1: NSPoint(x: 7.40081, y: 12.4125), controlPoint2: NSPoint(x: 7.46881, y: 12.8445))
+            path.curve(to: NSPoint(x: 7.91033, y: 13.8396), controlPoint1: NSPoint(x: 7.63882, y: 13.404), controlPoint2: NSPoint(x: 7.75182, y: 13.5955))
+            path.curve(to: NSPoint(x: 7.80083, y: 14.4216), controlPoint1: NSPoint(x: 8.01983, y: 14.0011), controlPoint2: NSPoint(x: 8.09533, y: 14.2411))
+            path.curve(to: NSPoint(x: 5.97027, y: 14.2601), controlPoint1: NSPoint(x: 7.15181, y: 14.8231), controlPoint2: NSPoint(x: 6.02327, y: 14.2866))
+            path.curve(to: NSPoint(x: 2.78467, y: 11.069), controlPoint1: NSPoint(x: 4.65673, y: 13.4865), controlPoint2: NSPoint(x: 3.5587, y: 12.4655))
+            path.curve(to: NSPoint(x: 1.53164, y: 6.74384), controlPoint1: NSPoint(x: 2.03715, y: 9.72493), controlPoint2: NSPoint(x: 1.60314, y: 8.28289))
+            path.curve(to: NSPoint(x: 1.99215, y: 6.17332), controlPoint1: NSPoint(x: 1.51264, y: 6.37233), controlPoint2: NSPoint(x: 1.62214, y: 6.24082))
+            path.curve(to: NSPoint(x: 3.46769, y: 6.13582), controlPoint1: NSPoint(x: 2.47916, y: 6.08332), controlPoint2: NSPoint(x: 2.98118, y: 6.06432))
+            path.curve(to: NSPoint(x: 8.74385, y: 8.8129), controlPoint1: NSPoint(x: 5.52476, y: 6.43633), controlPoint2: NSPoint(x: 7.27581, y: 7.35586))
+            path.curve(to: NSPoint(x: 10.8689, y: 11.6025), controlPoint1: NSPoint(x: 9.58188, y: 9.64243), controlPoint2: NSPoint(x: 10.2159, y: 10.634))
+            path.curve(to: NSPoint(x: 13.262, y: 14.4146), controlPoint1: NSPoint(x: 11.5634, y: 12.631), controlPoint2: NSPoint(x: 12.3105, y: 13.611))
+            path.curve(to: NSPoint(x: 14.1225, y: 15.0681), controlPoint1: NSPoint(x: 13.598, y: 14.6961), controlPoint2: NSPoint(x: 13.866, y: 14.9101))
+            path.curve(to: NSPoint(x: 11.1749, y: 14.4746), controlPoint1: NSPoint(x: 13.349, y: 15.1546), controlPoint2: NSPoint(x: 12.058, y: 15.1731))
+            path.line(to: NSPoint(x: 11.1749, y: 14.4736))
+            path.close()
+            path.move(to: NSPoint(x: 12.141, y: 8.25988))
+            path.curve(to: NSPoint(x: 12.439, y: 7.96338), controlPoint1: NSPoint(x: 12.141, y: 8.09488), controlPoint2: NSPoint(x: 12.273, y: 7.96338))
+            path.curve(to: NSPoint(x: 12.541, y: 7.98188), controlPoint1: NSPoint(x: 12.4765, y: 7.96338), controlPoint2: NSPoint(x: 12.5105, y: 7.97088))
+            path.curve(to: NSPoint(x: 12.6505, y: 8.05338), controlPoint1: NSPoint(x: 12.5825, y: 7.99688), controlPoint2: NSPoint(x: 12.6205, y: 8.01938))
+            path.curve(to: NSPoint(x: 12.7335, y: 8.25988), controlPoint1: NSPoint(x: 12.7035, y: 8.10588), controlPoint2: NSPoint(x: 12.7335, y: 8.18088))
+            path.curve(to: NSPoint(x: 12.4355, y: 8.55639), controlPoint1: NSPoint(x: 12.7335, y: 8.42489), controlPoint2: NSPoint(x: 12.6015, y: 8.55639))
+            path.curve(to: NSPoint(x: 12.141, y: 8.25988), controlPoint1: NSPoint(x: 12.2695, y: 8.55639), controlPoint2: NSPoint(x: 12.141, y: 8.42489))
+            path.close()
+            path.move(to: NSPoint(x: 15.1415, y: 9.79893))
+            path.curve(to: NSPoint(x: 14.5715, y: 9.95294), controlPoint1: NSPoint(x: 14.949, y: 9.87793), controlPoint2: NSPoint(x: 14.7565, y: 9.94544))
+            path.curve(to: NSPoint(x: 13.8015, y: 9.70893), controlPoint1: NSPoint(x: 14.2845, y: 9.96794), controlPoint2: NSPoint(x: 13.9715, y: 9.85143))
+            path.curve(to: NSPoint(x: 13.2695, y: 8.97691), controlPoint1: NSPoint(x: 13.5375, y: 9.48742), controlPoint2: NSPoint(x: 13.3485, y: 9.36342))
+            path.curve(to: NSPoint(x: 13.2845, y: 8.40989), controlPoint1: NSPoint(x: 13.2355, y: 8.8119), controlPoint2: NSPoint(x: 13.2545, y: 8.55639))
+            path.curve(to: NSPoint(x: 13.0545, y: 7.70787), controlPoint1: NSPoint(x: 13.3525, y: 8.09438), controlPoint2: NSPoint(x: 13.277, y: 7.89187))
+            path.curve(to: NSPoint(x: 12.39, y: 7.51636), controlPoint1: NSPoint(x: 12.8735, y: 7.55786), controlPoint2: NSPoint(x: 12.643, y: 7.51636))
+            path.curve(to: NSPoint(x: 12.1445, y: 7.44136), controlPoint1: NSPoint(x: 12.2955, y: 7.51636), controlPoint2: NSPoint(x: 12.209, y: 7.47486))
+            path.curve(to: NSPoint(x: 12.035, y: 7.09585), controlPoint1: NSPoint(x: 12.039, y: 7.38886), controlPoint2: NSPoint(x: 11.9519, y: 7.25735))
+            path.curve(to: NSPoint(x: 12.22, y: 6.89334), controlPoint1: NSPoint(x: 12.0615, y: 7.04335), controlPoint2: NSPoint(x: 12.19, y: 6.91584))
+            path.curve(to: NSPoint(x: 13.326, y: 6.90834), controlPoint1: NSPoint(x: 12.5635, y: 6.69784), controlPoint2: NSPoint(x: 12.9595, y: 6.76184))
+            path.curve(to: NSPoint(x: 14.292, y: 7.66287), controlPoint1: NSPoint(x: 13.6655, y: 7.04735), controlPoint2: NSPoint(x: 13.9225, y: 7.30236))
+            path.curve(to: NSPoint(x: 14.9525, y: 8.54539), controlPoint1: NSPoint(x: 14.6695, y: 8.09838), controlPoint2: NSPoint(x: 14.7375, y: 8.21838))
+            path.curve(to: NSPoint(x: 15.3831, y: 9.36392), controlPoint1: NSPoint(x: 15.1225, y: 8.8009), controlPoint2: NSPoint(x: 15.277, y: 9.06341))
+            path.curve(to: NSPoint(x: 15.1415, y: 9.79893), controlPoint1: NSPoint(x: 15.4471, y: 9.55142), controlPoint2: NSPoint(x: 15.3641, y: 9.70493))
+            path.close()
+            let scale = (rect.width - 2) / 23.16
+            var transform = AffineTransform()
+            transform.translate(x: rect.midX - 23.16 * scale / 2, y: rect.midY + 17.04 * scale / 2)
+            transform.scale(x: scale, y: -scale)
+            path.transform(using: transform)
+            path.windingRule = .nonZero
+            NSColor.black.setFill()
             path.fill()
             return true
         }
+        image.isTemplate = true
+        return image
     }
 
     /// 菜单头部的状态色点：纯色实心圆，颜色跟随 mood。
