@@ -46,7 +46,6 @@ final class MoodBallModel: ObservableObject {
 
     @Published private(set) var connected = false
     @Published private(set) var mood = "idle"
-    @Published private(set) var ballSize: CGFloat = 120
     @Published private(set) var color: Color = Color(hex: disconnectedHex)
     @Published private(set) var moodLabel = "未连接"
     @Published private(set) var breathingPeriod: Double = 2.0
@@ -221,7 +220,6 @@ final class MoodBallModel: ObservableObject {
     }
 
     private func apply(_ snapshot: MoodBridgeSnapshot, connection: TransportConnection) {
-        ballSize = SettingsStore.shared.ballSize
         breathingPeriod = SettingsStore.shared.breathingSpeed
 
         switch connection {

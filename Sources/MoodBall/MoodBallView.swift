@@ -52,7 +52,7 @@ struct MoodBallView: View {
     }
 
     var body: some View {
-        let d = model.ballSize
+        let d = settings.ballSize
         let showBubble = model.bubbleText != nil && settings.showStatusBubble
         let panelWidth = Self.panelWidth(
             for: settings.skin, size: d, glowEnabled: settings.glowEnabled, showBubble: showBubble
