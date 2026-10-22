@@ -63,8 +63,9 @@ private struct PreviewBall: View {
     var body: some View {
         let d = settings.ballSize
         Group {
-            if settings.skin == .xiaoyu {
+            if settings.skin.isSprite {
                 XiaoyuSpriteView(
+                    skin: settings.skin,
                     mood: "idle",
                     color: settings.moodColors["idle"] ?? Color(hex: 0x60a5fa),
                     size: d,

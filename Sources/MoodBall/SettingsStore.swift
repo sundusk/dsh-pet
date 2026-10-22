@@ -28,6 +28,10 @@ let disconnectedHex: UInt32 = 0x9ca3af
 enum FloatingPetSkin: String, CaseIterable, Identifiable {
     case moodBall
     case xiaoyu
+    case xinzhizhu
+    case jingyuniang
+
+    var isSprite: Bool { self != .moodBall }
 
     var id: String { rawValue }
 
@@ -35,6 +39,8 @@ enum FloatingPetSkin: String, CaseIterable, Identifiable {
         switch self {
         case .moodBall: return "心情球"
         case .xiaoyu: return "小雨"
+        case .xinzhizhu: return "新之助"
+        case .jingyuniang: return "鲸鱼娘"
         }
     }
 }

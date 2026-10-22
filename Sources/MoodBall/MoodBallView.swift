@@ -36,11 +36,11 @@ struct MoodBallView: View {
     static let tailGap: CGFloat = 4
 
     static func petHeight(for skin: FloatingPetSkin, size: CGFloat, glowEnabled: Bool) -> CGFloat {
-        skin == .xiaoyu ? size * (glowEnabled ? 1.55 : 1.10) : size * 2
+        skin.isSprite ? size * (glowEnabled ? 1.55 : 1.10) : size * 2
     }
 
     static func panelWidth(for skin: FloatingPetSkin, size: CGFloat, glowEnabled: Bool, showBubble: Bool) -> CGFloat {
-        if skin == .xiaoyu && !showBubble {
+        if skin.isSprite && !showBubble {
             return size * (glowEnabled ? 1.55 : 0.95)
         }
         return size * 2
@@ -48,7 +48,7 @@ struct MoodBallView: View {
 
     static func panelHeight(for skin: FloatingPetSkin, size: CGFloat, glowEnabled: Bool, showBubble: Bool) -> CGFloat {
         petHeight(for: skin, size: size, glowEnabled: glowEnabled)
-            + (showBubble ? bubbleHeight + (skin == .xiaoyu ? tailGap : 0) : 0)
+            + (showBubble ? bubbleHeight + (skin.isSprite ? tailGap : 0) : 0)
     }
 
     var body: some View {
@@ -70,8 +70,9 @@ struct MoodBallView: View {
                 case .moodBall:
                     moodBallArtwork(diameter: d)
                         .contentShape(Circle())
-                case .xiaoyu:
+                case .xiaoyu, .xinzhizhu, .jingyuniang:
                     XiaoyuSpriteView(
+                        skin: settings.skin,
                         mood: model.mood,
                         color: model.color,
                         size: d,
@@ -90,7 +91,7 @@ struct MoodBallView: View {
             ZStack(alignment: .top) {
                 if showBubble, let text = model.bubbleText {
                     SpeechBubble(text: text, color: model.color)
-                        .offset(y: settings.skin == .xiaoyu ? 0 : bubbleAnchorOffset - Self.tailGap)
+                        .offset(y: settings.skin.isSprite ? 0 : bubbleAnchorOffset - Self.tailGap)
                         .transition(.scale(scale: 0.8, anchor: .bottom).combined(with: .opacity))
                 }
             }
@@ -178,7 +179,7 @@ struct MoodBallView: View {
         switch settings.skin {
         case .moodBall:
             return diameter / 2
-        case .xiaoyu:
+        case .xiaoyu, .xinzhizhu, .jingyuniang:
             return diameter
         }
     }

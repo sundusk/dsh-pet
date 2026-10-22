@@ -520,9 +520,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let d = settings.ballSize
         let petFrame: NSRect?
         if let panel, panel.isVisible {
-            if settings.skin == .xiaoyu {
-                // The atlas's opaque pixels span at most 149 of 208 pixels, including drag frames.
-                let petWidth = d * 0.75
+            if settings.skin.isSprite {
+                // Codex 宠物保留完整单格的交互宽度，小雨沿用原来的贴合区域。
+                let petWidth = d * (settings.skin == .xiaoyu ? 0.75 : 192.0 / 208.0)
                 petFrame = NSRect(
                     x: panel.frame.midX - petWidth / 2,
                     y: panel.frame.minY,
@@ -536,7 +536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             petFrame = nil
         }
         let insidePet: Bool
-        if settings.skin == .xiaoyu {
+        if settings.skin.isSprite {
             insidePet = petFrame?.insetBy(dx: -8, dy: -4).contains(mouse) == true
         } else if let panel, panel.isVisible {
             let ballCenter = NSPoint(x: panel.frame.midX, y: panel.frame.minY + d)

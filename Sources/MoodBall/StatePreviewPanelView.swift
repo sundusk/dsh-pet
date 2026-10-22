@@ -76,7 +76,7 @@ struct StatePreviewPanelView: View {
         }
         let dir = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        let filename = "\(selectedSkin == .xiaoyu ? "xiaoyu" : "moodball")-\(mood).png"
+        let filename = "\(selectedSkin.rawValue.lowercased())-\(mood).png"
         let url = dir.appendingPathComponent(filename)
         do {
             try png.write(to: url)
@@ -169,8 +169,9 @@ private struct PetWithBubble: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            if skin == .xiaoyu {
+            if skin.isSprite {
                 XiaoyuSpriteView(
+                    skin: skin,
                     mood: mood,
                     color: color,
                     size: size,
@@ -183,7 +184,7 @@ private struct PetWithBubble: View {
             }
             if let text {
                 SpeechBubble(text: text, color: color)
-                    .offset(y: size * (skin == .xiaoyu ? (settings.glowEnabled ? 0.55 : 0.10) : 0.5)
+                    .offset(y: size * (skin.isSprite ? (settings.glowEnabled ? 0.55 : 0.10) : 0.5)
                         - MoodBallView.bubbleHeight - MoodBallView.tailGap)
             }
         }

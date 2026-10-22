@@ -22,8 +22,8 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 cp "$BUILD_DIR/$EXEC_NAME" "$APP_DIR/Contents/MacOS/$BUNDLE_EXEC_NAME"
 
-echo "==> 复制小雨宠物图集"
-for pet_resource in Resources/Pet/Xiaoyu/XiaoyuSprites.png Resources/Pet/Xiaoyu/XiaoyuDragSprites.png; do
+echo "==> 复制宠物图集"
+for pet_resource in Resources/Pet/Xiaoyu/XiaoyuSprites.png Resources/Pet/Xiaoyu/XiaoyuDragSprites.png Resources/Pet/Xinzhizhu/XinzhizhuSprites.webp Resources/Pet/Jingyuniang/JingyuniangSprites.png; do
 	if [ ! -f "$pet_resource" ]; then
 		echo "未找到宠物资源：$pet_resource" >&2
 		exit 1

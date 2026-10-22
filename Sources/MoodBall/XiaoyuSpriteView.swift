@@ -132,7 +132,9 @@ enum XiaoyuAnimation: String, CaseIterable {
         return elapsed >= 0 && elapsed < waveInteractionDuration
     }
 
-    func frameIndex(elapsed: TimeInterval) -> Int {
+    func frameIndex(elapsed: TimeInterval, frameCount: Int? = nil) -> Int {
+        let frameDurations = Array(self.frameDurations.prefix(frameCount ?? self.frameDurations.count))
+        let totalDuration = frameDurations.reduce(0, +)
         guard !frameDurations.isEmpty else { return 0 }
         let safeElapsed = max(0, elapsed)
         let position: TimeInterval
@@ -253,6 +255,7 @@ struct XiaoyuDragSpriteAtlas {
 }
 
 struct XiaoyuSpriteView: View {
+    var skin: FloatingPetSkin = .xiaoyu
     let mood: String
     let color: Color
     let size: CGFloat
@@ -265,6 +268,19 @@ struct XiaoyuSpriteView: View {
 
     private static let atlas = try? XiaoyuSpriteAtlas()
     private static let dragAtlas = try? XiaoyuDragSpriteAtlas()
+    private static let xinzhizhuAtlas = try? CodexSpriteAtlas()
+
+    private static let jingyuniangAtlas = try? CodexSpriteAtlas(
+        resourceName: "JingyuniangSprites", fileExtension: "png", idleFrameCount: 6
+    )
+
+    private var codexAtlas: CodexSpriteAtlas? {
+        switch skin {
+        case .xinzhizhu: return Self.xinzhizhuAtlas
+        case .jingyuniang: return Self.jingyuniangAtlas
+        default: return nil
+        }
+    }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: XiaoyuAnimation.renderInterval)) { timeline in
@@ -309,6 +325,10 @@ struct XiaoyuSpriteView: View {
         .onChange(of: mood) {
             stateStartedAt = Date()
         }
+        .onChange(of: skin) {
+            stateStartedAt = Date()
+            dragStartedAt = Date()
+        }
         .onChange(of: dragDirection) {
             let now = Date()
             dragStartedAt = now
@@ -321,6 +341,9 @@ struct XiaoyuSpriteView: View {
     private func frameSelection(at date: Date) -> (frame: CGImage?, displayScale: CGFloat) {
         if let dragDirection {
             let elapsed = date.timeIntervalSince(dragStartedAt)
+            if skin == .xinzhizhu || skin == .jingyuniang {
+                return (codexAtlas?.dragFrame(for: dragDirection, elapsed: elapsed), 1)
+            }
             return (
                 Self.dragAtlas?.frame(
                     for: dragDirection,
@@ -339,6 +362,9 @@ struct XiaoyuSpriteView: View {
         let elapsed = waveActive
             ? date.timeIntervalSince(interactionTriggeredAt ?? date)
             : date.timeIntervalSince(stateStartedAt)
+        if skin == .xinzhizhu || skin == .jingyuniang {
+            return (codexAtlas?.frame(for: animation, elapsed: elapsed), 1)
+        }
         return (
             Self.atlas?.frame(for: animation, index: animation.frameIndex(elapsed: elapsed)),
             animation.displayScale
