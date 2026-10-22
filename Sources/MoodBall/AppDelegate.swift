@@ -116,7 +116,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var petContextPanel: PetContextPanel?
     private var petContextMonitors: [Any] = []
     private var settingsPanel: NSPanel?
-    private var statePreviewPanel: NSPanel?
     private var hoverMonitors: [Any] = []
     private var visibilitySink: AnyCancellable?
     private var settingsSink: AnyCancellable?
@@ -217,6 +216,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.collapseComposer()
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openSettingsPanel()
+        return true
+    }
+
     // MARK: - 悬浮窗
 
     private func setupPanel() {
@@ -255,7 +259,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hosting = NSHostingView(rootView: MoodBallView(
             model: model,
             settings: SettingsStore.shared,
-            onOpenDesktopHarness: { [weak self] in self?.openDesktopHarnessIfRunning() }
+            onOpenHarness: { [weak self] in self?.model.openHarness() }
         ))
         hosting.wantsLayer = true
         hosting.layer?.backgroundColor = NSColor.clear.cgColor
@@ -889,11 +893,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "设置…",
             selector: #selector(toggleSettingsPanel)
         ))
-        menu.addItem(makeShortcutMenuItem(
-            action: .statePreview,
-            title: "状态展示…",
-            selector: #selector(toggleStatePreviewPanel)
-        ))
 
         menu.addItem(.separator())
 
@@ -1078,11 +1077,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "设置…",
             selector: #selector(toggleSettingsPanel)
         ))
-        appMenu.addItem(makeShortcutMenuItem(
-            action: .statePreview,
-            title: "状态展示…",
-            selector: #selector(toggleStatePreviewPanel)
-        ))
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "退出 DSH Pet", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu
@@ -1124,28 +1118,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.openHarness()
     }
 
-    private func openDesktopHarnessIfRunning() {
-        // Official DeepSeek Harness uses com.deepseek.dsh for releases and a
-        // per-checkout com.deepseek.harness.dev.* ID for its development app.
-        let app = NSWorkspace.shared.runningApplications.first { running in
-            guard !running.isTerminated, let id = running.bundleIdentifier else { return false }
-            return id == "com.deepseek.dsh" || id.hasPrefix("com.deepseek.harness.dev.")
-        }
-        guard let app,
-              let bundleURL = app.bundleURL else { return }
-
-        // Reopening the running Electron app triggers its single-instance or
-        // activate handler, which restores a minimized or closed main window.
-        NSWorkspace.shared.openApplication(
-            at: bundleURL,
-            configuration: NSWorkspace.OpenConfiguration()
-        ) { _, error in
-            if let error {
-                appLog.error("could not reopen desktop Harness: \(error.localizedDescription)")
-            }
-        }
-    }
-
     // MARK: - 设置面板
 
     /// 打开/关闭设置面板（菜单栏「设置…」）
@@ -1163,15 +1135,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel = existing
         } else {
             let p = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 420, height: 520),
-                styleMask: [.titled, .closable],
+                contentRect: NSRect(x: 0, y: 0, width: 1060, height: 530),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             p.title = "DSH Pet 设置"
             p.isReleasedWhenClosed = false
             p.hidesOnDeactivate = false
-            p.contentView = NSHostingView(rootView: SettingsPanelView())
+            p.contentMinSize = NSSize(width: 980, height: 520)
+            p.appearance = NSAppearance(named: .aqua)
+            p.setFrameAutosaveName("DSHPetSettingsSidebar")
+            p.contentView = NSHostingView(rootView: SettingsPanelView(model: model))
             p.center()
             settingsPanel = p
             panel = p
@@ -1180,42 +1155,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         appLog.info("settings panel opened")
-    }
-
-    // MARK: - 状态展示面板（选状态看球，方便截图）
-
-    @objc func toggleStatePreviewPanel() {
-        if let statePreviewPanel, statePreviewPanel.isVisible {
-            statePreviewPanel.orderOut(nil)
-            return
-        }
-        // 与其他面板互斥
-        if let settingsPanel, settingsPanel.isVisible { settingsPanel.orderOut(nil) }
-        openStatePreviewPanel()
-    }
-
-    private func openStatePreviewPanel() {
-        let panel: NSPanel
-        if let existing = statePreviewPanel {
-            panel = existing
-        } else {
-            let p = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 380, height: 520),
-                styleMask: [.titled, .closable],
-                backing: .buffered,
-                defer: false
-            )
-            p.title = "DSH Pet 状态展示"
-            p.isReleasedWhenClosed = false
-            p.hidesOnDeactivate = false
-            p.contentView = NSHostingView(rootView: StatePreviewPanelView())
-            p.center()
-            statePreviewPanel = p
-            panel = p
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-        appLog.info("state preview panel opened")
     }
 
     /// 是否已有同 Bundle ID 的其它实例在运行（用于单实例守卫）。

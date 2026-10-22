@@ -13,6 +13,8 @@ final class MoodBridge: ObservableObject {
     private let http: HTTPPollingTransport
     private var fallbackTask: Task<Void, Never>?
     private var isRunning = false
+    private var selectedInstance: HarnessInstance?
+    private var allowLegacy = true
 
     init(settings: SettingsStore? = nil) {
         let settings = settings ?? SettingsStore.shared
@@ -27,16 +29,39 @@ final class MoodBridge: ObservableObject {
     }
 
     func start() {
-        guard fallbackTask == nil, !local.isConnected, !http.isConnected else { return }
+        guard !local.isConnected, !http.isConnected else { return }
         isRunning = true
         connection = .unavailable
         transportKind = .disconnected
+        guard selectedInstance != nil || allowLegacy else { return }
         local.connect()
-        fallbackTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard !Task.isCancelled else { return }
-            self?.startHTTPFallback()
+        scheduleHTTPFallbackIfAllowed()
+    }
+
+    /// Select one discovered Harness instance, the legacy local bridge, or no
+    /// bridge at all. Explicit instances never fall through to another origin.
+    func configure(instance: HarnessInstance?, allowLegacy: Bool) {
+        self.selectedInstance = instance
+        self.allowLegacy = allowLegacy
+        let path = instance?.statusSocketPath ?? LocalSocketTransport.defaultSocketPath
+        if instance != nil || allowLegacy {
+            local.reconfigure(socketPath: path, expectedInstanceID: instance?.instanceId)
+        } else {
+            local.disconnect()
         }
+        fallbackTask?.cancel()
+        fallbackTask = nil
+        http.disconnect()
+        connection = .unavailable
+        transportKind = .disconnected
+        snapshot = .disconnected
+        guard isRunning else { return }
+        if instance == nil && !allowLegacy {
+            local.disconnect()
+            return
+        }
+        local.connect()
+        scheduleHTTPFallbackIfAllowed()
     }
 
     func stop() {
@@ -61,13 +86,15 @@ final class MoodBridge: ObservableObject {
     private func wire(_ transport: any HarnessStateTransport, kind: TransportKind) {
         transport.onStateChanged = { [weak self] snapshot in
             guard let self else { return }
-            if kind == .http && self.local.isConnected { return }
+            if kind == .http && (self.selectedInstance != nil || !self.allowLegacy || self.local.isConnected) { return }
+            if let expected = self.selectedInstance?.instanceId,
+               snapshot.instanceId != expected { return }
             self.snapshot = snapshot
             self.transportKind = kind
         }
         transport.onConnectionChanged = { [weak self] status in
             guard let self else { return }
-            if kind == .http && self.local.isConnected { return }
+            if kind == .http && (self.selectedInstance != nil || !self.allowLegacy || self.local.isConnected) { return }
             self.connection = status
             if status == .connected {
                 self.transportKind = kind
@@ -76,15 +103,24 @@ final class MoodBridge: ObservableObject {
                     self.fallbackTask?.cancel()
                     self.fallbackTask = nil
                 }
-            } else if kind == .localSocket && status == .unavailable && self.isRunning && self.fallbackTask == nil {
-                self.startHTTPFallback()
+            } else if kind == .localSocket && status == .unavailable && self.isRunning {
+                self.scheduleHTTPFallbackIfAllowed()
             }
+        }
+    }
+
+    private func scheduleHTTPFallbackIfAllowed() {
+        guard allowLegacy, selectedInstance == nil, fallbackTask == nil, isRunning, !local.isConnected else { return }
+        fallbackTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.startHTTPFallback()
         }
     }
 
     private func startHTTPFallback() {
         fallbackTask = nil
-        guard !local.isConnected else { return }
+        guard allowLegacy, selectedInstance == nil, !local.isConnected else { return }
         transportKind = .http
         http.connect()
     }

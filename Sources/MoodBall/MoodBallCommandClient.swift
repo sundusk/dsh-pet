@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Darwin
 import Network
 import SwiftUI
 
@@ -110,6 +111,7 @@ final class MoodBallCommandClient: ObservableObject {
         static let taskReadMarkers = "moodball.command.taskReadMarkers"
         static let draftImages = "moodball.command.draftImages"
         static let requestSignature = "moodball.command.pendingRequestSignature"
+        static let targetBindingKey = "moodball.command.targetBindingKey"
     }
 
     private struct TaskReadMarker: Codable {
@@ -118,7 +120,13 @@ final class MoodBallCommandClient: ObservableObject {
     }
 
     private let defaults: UserDefaults
-    private let socketPath: String
+    private let legacySocketPath: String
+    private var socketPath: String
+    private var expectedInstanceID: String?
+    private var targetInstance: HarnessInstance?
+    private var persistedTargetBindingKey: String?
+    private var allowLegacy = true
+    private var sourceEnabled = true
     private let queue = DispatchQueue(label: "com.sundusk.moodball.command-client")
     private var connectionHandle: NWConnection?
     private var receiveBuffer = Data()
@@ -129,13 +137,17 @@ final class MoodBallCommandClient: ObservableObject {
     private var pendingRequestText: String?
     private var pendingRequestSignature: String?
     private var reconnectTask: Task<Void, Never>?
+    private var connectionGeneration = 0
+    private var capabilitiesValidated = false
     private var readMarkers: [String: TaskReadMarker] = [:]
     private var hasReceivedTaskBaseline = false
     private var presentedActiveTaskIDs: Set<String>?
 
     init(defaults: UserDefaults = .standard, socketPath: String = MoodBallCommandClient.defaultSocketPath) {
         self.defaults = defaults
+        self.legacySocketPath = socketPath
         self.socketPath = socketPath
+        persistedTargetBindingKey = defaults.string(forKey: Keys.targetBindingKey)
         selectedWorkspaceID = defaults.string(forKey: Keys.workspaceID)
         sessionID = defaults.string(forKey: Keys.sessionID)
         draft = defaults.string(forKey: Keys.draft) ?? ""
@@ -226,6 +238,21 @@ final class MoodBallCommandClient: ObservableObject {
         return !(sessionSnapshot?.taskRunning ?? false)
     }
 
+    /// A source change is destructive to the local routing context while a
+    /// draft or an unconfirmed request is present. The caller can use this to
+    /// disable a target picker before invoking `configure`.
+    var targetSwitchBlocked: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !draftImages.isEmpty
+            || submissionStatus == .submitting
+            || submissionStatus == .unconfirmed
+            || pendingRequestID != nil
+    }
+
+    var targetBindingKey: String? {
+        targetInstance?.bindingKey ?? persistedTargetBindingKey
+    }
+
     var attachmentLimitSummary: String? {
         guard let imageLimits else { return nil }
         return "最多 \(imageLimits.maxImagesPerMessage) 张，单张 \(Self.byteLabel(imageLimits.maxImageBytes))"
@@ -240,23 +267,95 @@ final class MoodBallCommandClient: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        guard sourceEnabled else {
+            connection = .disconnected
+            return
+        }
         connect()
+    }
+
+    /// Switch the command source. Every connection is revalidated against the
+    /// selected descriptor before any business request is allowed through.
+    @discardableResult
+    func configure(instance: HarnessInstance?, allowLegacy: Bool) -> Bool {
+        let currentBinding = targetBindingKey ?? (self.allowLegacy ? "legacy" : nil)
+        let requestedBinding = instance?.bindingKey ?? (allowLegacy ? "legacy" : currentBinding)
+        let sameInstance = targetInstance?.instanceId == instance?.instanceId
+        let oldTargetStillRunning = targetInstance.map { Darwin.kill($0.pid, 0) == 0 } ?? false
+        let parallelSameBinding = instance != nil
+            && targetInstance != nil
+            && requestedBinding == currentBinding
+            && !sameInstance
+            && oldTargetStillRunning
+        let changed = requestedBinding != currentBinding || parallelSameBinding
+        let canAdoptUnidentifiedTarget = targetInstance == nil
+            && persistedTargetBindingKey == nil
+            && instance != nil
+            && pendingRequestID == nil
+            && submissionStatus != .submitting
+            && submissionStatus != .unconfirmed
+        if changed && targetSwitchBlocked && !canAdoptUnidentifiedTarget {
+            lastError = "请先处理当前草稿或未确认请求，再切换 Harness 来源"
+            return false
+        }
+
+        let hadUnidentifiedHistory = persistedTargetBindingKey == nil
+            && targetInstance == nil
+            && instance != nil
+            && (selectedWorkspaceID != nil || sessionID != nil || pendingRequestID != nil)
+        invalidateConnection(clearPersistedPending: changed)
+        if changed {
+            clearTargetCaches()
+        } else {
+            // A restarted process may keep the same stable bindingKey but has
+            // a new instanceId. Never replay old queued or in-flight requests.
+            queuedPayloads.removeAll(keepingCapacity: false)
+            failPending(with: MoodBallCommandError.unavailable)
+            if submissionStatus == .submitting {
+                submissionStatus = pendingRequestID == nil ? .idle : .unconfirmed
+            }
+        }
+
+        if hadUnidentifiedHistory {
+            selectedWorkspaceID = nil
+            defaults.removeObject(forKey: Keys.workspaceID)
+            continuationWarning = "Harness 来源已更新，请重新选择工作区"
+        }
+
+        self.allowLegacy = allowLegacy
+        sourceEnabled = instance != nil || allowLegacy
+        if let instance {
+            targetInstance = instance
+            persistedTargetBindingKey = instance.bindingKey
+            defaults.set(instance.bindingKey, forKey: Keys.targetBindingKey)
+            socketPath = instance.commandSocketPath
+            expectedInstanceID = instance.instanceId
+        } else if allowLegacy {
+            targetInstance = nil
+            persistedTargetBindingKey = "legacy"
+            defaults.set("legacy", forKey: Keys.targetBindingKey)
+            socketPath = legacySocketPath
+            expectedInstanceID = nil
+        } else {
+            // Keep the last target identity for a later rediscovery, while the
+            // disabled state prevents any stale socket from being used.
+            socketPath = legacySocketPath
+            expectedInstanceID = nil
+        }
+        capabilitiesValidated = false
+        resetCapabilityState()
+        guard started, sourceEnabled else {
+            connection = .disconnected
+            return true
+        }
+        connect()
+        return true
     }
 
     func stop() {
         started = false
-        connectionHandle?.cancel()
-        connectionHandle = nil
-        reconnectTask?.cancel()
-        reconnectTask = nil
-        queuedPayloads.removeAll(keepingCapacity: false)
-        receiveBuffer.removeAll(keepingCapacity: false)
-        failPending(with: MoodBallCommandError.unavailable)
-        connection = .disconnected
-        capabilitiesAvailable = false
-        taskListAvailable = false
-        imageAttachmentsAvailable = false
-        imageLimits = nil
+        invalidateConnection(clearPersistedPending: false)
+        resetCapabilityState()
     }
 
     func addImageFromPasteboard(_ pasteboard: NSPasteboard = .general) {
@@ -323,10 +422,16 @@ final class MoodBallCommandClient: ObservableObject {
     }
 
     func refreshWorkspaces() {
+        refreshWorkspaces(expectedGeneration: nil)
+    }
+
+    private func refreshWorkspaces(expectedGeneration: Int?) {
+        let generation = expectedGeneration ?? connectionGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let response = try await request(action: "workspaces")
+                let response = try await request(action: "workspaces", expectedGeneration: generation)
+                guard self.connectionGeneration == generation else { return }
                 let decoded = decodeWorkspaces(response["workspaces"])
                 workspaces = decoded
                 if let selectedWorkspaceID, decoded.contains(where: { $0.id == selectedWorkspaceID }) {
@@ -339,6 +444,7 @@ final class MoodBallCommandClient: ObservableObject {
                     defaults.removeObject(forKey: Keys.workspaceID)
                 }
             } catch {
+                guard self.connectionGeneration == generation else { return }
                 record(error)
             }
         }
@@ -419,12 +525,15 @@ final class MoodBallCommandClient: ObservableObject {
 
     func refreshTasks() {
         guard taskListAvailable else { return }
+        let generation = connectionGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let response = try await request(action: "tasks", timeout: 12)
+                let response = try await request(action: "tasks", timeout: 12, expectedGeneration: generation)
+                guard self.connectionGeneration == generation else { return }
                 applyTasks(response["tasks"])
             } catch {
+                guard self.connectionGeneration == generation else { return }
                 record(error)
             }
         }
@@ -461,11 +570,15 @@ final class MoodBallCommandClient: ObservableObject {
 
         submissionStatus = .submitting
         lastError = nil
+        let generation = connectionGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
+                guard self.connectionGeneration == generation else { throw MoodBallCommandError.unavailable }
                 let encodedImages = try encodedDraftImages(submittedImages)
-                let sessionID = try await ensureSession()
+                guard self.connectionGeneration == generation else { throw MoodBallCommandError.unavailable }
+                let sessionID = try await ensureSession(expectedGeneration: generation)
+                guard self.connectionGeneration == generation else { throw MoodBallCommandError.unavailable }
                 let workspaceID = try requireWorkspaceID()
                 let response = try await request(
                     action: "prompt",
@@ -476,8 +589,10 @@ final class MoodBallCommandClient: ObservableObject {
                         "text": text,
                         "images": encodedImages,
                     ],
-                    timeout: 32
+                    timeout: 32,
+                    expectedGeneration: generation
                 )
+                guard self.connectionGeneration == generation else { return }
                 guard response["ok"] as? Bool != false,
                       response["accepted"] as? Bool == true else {
                     throw MoodBallCommandError.malformed
@@ -496,8 +611,10 @@ final class MoodBallCommandClient: ObservableObject {
                     onAccepted?()
                 }
                 try? await Task.sleep(nanoseconds: 1_600_000_000)
+                guard self.connectionGeneration == generation else { return }
                 if submissionStatus == .submitted { submissionStatus = .idle }
             } catch {
+                guard self.connectionGeneration == generation else { return }
                 if case MoodBallCommandError.timedOut = error {
                     submissionStatus = .unconfirmed
                 } else {
@@ -515,18 +632,17 @@ final class MoodBallCommandClient: ObservableObject {
         }
     }
 
-    private func ensureSession() async throws -> String {
+    private func ensureSession(expectedGeneration: Int) async throws -> String {
+        guard connectionGeneration == expectedGeneration else { throw MoodBallCommandError.unavailable }
         let workspaceID = try requireWorkspaceID()
         let session = sessionID ?? "moodball-session-\(UUID().uuidString.lowercased())"
-        if sessionID == nil {
-            sessionID = session
-            defaults.set(session, forKey: Keys.sessionID)
-        }
         let response = try await request(
             action: "createSession",
             fields: ["workspaceId": workspaceID, "sessionId": session],
-            timeout: 12
+            timeout: 12,
+            expectedGeneration: expectedGeneration
         )
+        guard connectionGeneration == expectedGeneration else { throw MoodBallCommandError.unavailable }
         guard let returnedSession = response["sessionId"] as? String, !returnedSession.isEmpty else {
             throw MoodBallCommandError.malformed
         }
@@ -535,9 +651,12 @@ final class MoodBallCommandClient: ObservableObject {
         let subscribed = try await request(
             action: "subscribe",
             fields: ["sessionId": returnedSession],
-            timeout: 8
+            timeout: 8,
+            expectedGeneration: expectedGeneration
         )
-        if let snapshot = decodeSnapshot(subscribed["snapshot"]) {
+        guard connectionGeneration == expectedGeneration else { throw MoodBallCommandError.unavailable }
+        if let snapshot = decodeSnapshot(subscribed["snapshot"]),
+           snapshotMatchesSelectedInstance(snapshot) {
             sessionSnapshot = snapshot
         }
         return returnedSession
@@ -564,19 +683,65 @@ final class MoodBallCommandClient: ObservableObject {
         continuationWarning = nil
     }
 
+    private func clearTargetCaches() {
+        selectedWorkspaceID = nil
+        defaults.removeObject(forKey: Keys.workspaceID)
+        workspaces = []
+        tasks = []
+        readMarkers = [:]
+        defaults.removeObject(forKey: Keys.taskReadMarkers)
+        hasReceivedTaskBaseline = false
+        presentedActiveTaskIDs = nil
+        focusedTaskID = nil
+        clearSessionBinding()
+        submissionStatus = .idle
+        lastError = nil
+    }
+
+    private func invalidateConnection(clearPersistedPending: Bool) {
+        connectionGeneration &+= 1
+        connectionHandle?.cancel()
+        connectionHandle = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        queuedPayloads.removeAll(keepingCapacity: false)
+        receiveBuffer.removeAll(keepingCapacity: false)
+        failPending(with: MoodBallCommandError.unavailable)
+        if clearPersistedPending {
+            pendingRequestID = nil
+            pendingRequestText = nil
+            pendingRequestSignature = nil
+            defaults.removeObject(forKey: Keys.requestID)
+            defaults.removeObject(forKey: Keys.requestText)
+            defaults.removeObject(forKey: Keys.requestSignature)
+        }
+        connection = .disconnected
+    }
+
+    private func resetCapabilityState() {
+        capabilitiesValidated = false
+        capabilitiesAvailable = false
+        taskListAvailable = false
+        imageAttachmentsAvailable = false
+        imageLimits = nil
+    }
+
     private func connect() {
-        guard started, connectionHandle == nil else { return }
+        guard started, sourceEnabled, connectionHandle == nil else { return }
         connection = .connecting
         receiveBuffer.removeAll(keepingCapacity: true)
+        let generation = connectionGeneration
         let handle = NWConnection(to: .unix(path: socketPath), using: .tcp)
         connectionHandle = handle
         handle.stateUpdateHandler = { [weak self] state in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self,
+                      self.connectionGeneration == generation,
+                      self.connectionHandle === handle else { return }
                 switch state {
                 case .ready:
                     connection = .connected
-                    flushQueuedPayloads()
+                    resetCapabilityState()
                     refreshCapabilitiesAndWorkspaces()
                 case .waiting:
                     // A Unix socket that is not available yet enters
@@ -585,18 +750,14 @@ final class MoodBallCommandClient: ObservableObject {
                     // starts and creates the command socket.
                     connectionHandle = nil
                     connection = .disconnected
-                    capabilitiesAvailable = false
-                    taskListAvailable = false
-                    imageAttachmentsAvailable = false
+                    resetCapabilityState()
                     failPending(with: MoodBallCommandError.unavailable)
                     handle.cancel()
                     scheduleReconnect()
                 case .failed, .cancelled:
                     connectionHandle = nil
                     connection = .disconnected
-                    capabilitiesAvailable = false
-                    taskListAvailable = false
-                    imageAttachmentsAvailable = false
+                    resetCapabilityState()
                     failPending(with: MoodBallCommandError.unavailable)
                     scheduleReconnect()
                 default:
@@ -611,14 +772,13 @@ final class MoodBallCommandClient: ObservableObject {
     private func receiveNext(on handle: NWConnection) {
         handle.receive(minimumIncompleteLength: 1, maximumLength: 128 * 1024) { [weak self] data, _, isComplete, _ in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self,
+                      self.connectionHandle === handle else { return }
                 if let data { consume(data) }
                 if isComplete {
                     connectionHandle = nil
                     connection = .disconnected
-                    capabilitiesAvailable = false
-                    taskListAvailable = false
-                    imageAttachmentsAvailable = false
+                    resetCapabilityState()
                     failPending(with: MoodBallCommandError.unavailable)
                     scheduleReconnect()
                 } else if connectionHandle != nil {
@@ -638,7 +798,8 @@ final class MoodBallCommandClient: ObservableObject {
             if object["event"] as? String == "status" {
                 if let sessionID = object["sessionId"] as? String,
                    sessionID == self.sessionID,
-                   let snapshot = decodeSnapshot(object["snapshot"]) {
+                   let snapshot = decodeSnapshot(object["snapshot"]),
+                   snapshotMatchesSelectedInstance(snapshot) {
                     sessionSnapshot = snapshot
                 }
                 continue
@@ -663,10 +824,18 @@ final class MoodBallCommandClient: ObservableObject {
     private func request(
         action: String,
         fields: [String: Any] = [:],
-        timeout: TimeInterval = 8
+        timeout: TimeInterval = 8,
+        expectedGeneration: Int? = nil
     ) async throws -> [String: Any] {
         guard started else { throw MoodBallCommandError.unavailable }
+        if let expectedGeneration, expectedGeneration != connectionGeneration {
+            throw MoodBallCommandError.unavailable
+        }
+        if action != "capabilities" && !capabilitiesValidated {
+            throw MoodBallCommandError.unavailable
+        }
         connect()
+        let requestGeneration = connectionGeneration
         let id = UUID().uuidString.lowercased()
         var object: [String: Any] = ["id": id, "action": action]
         for (key, value) in fields { object[key] = value }
@@ -678,29 +847,39 @@ final class MoodBallCommandClient: ObservableObject {
             Task { @MainActor [weak self] in
                 let delay = UInt64(max(0.5, timeout) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: delay)
-                self?.timeOut(id)
+                guard let self, self.connectionGeneration == requestGeneration else { return }
+                self.timeOut(id)
             }
         }
     }
 
     private func refreshCapabilitiesAndWorkspaces() {
+        let generation = connectionGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let response = try await request(action: "capabilities", timeout: 5)
+                let response = try await request(
+                    action: "capabilities",
+                    timeout: 5,
+                    expectedGeneration: generation
+                )
+                guard self.connectionGeneration == generation else { return }
                 guard response["protocolVersion"] as? Int == 1,
-                      response["commandSocket"] as? Bool == true else {
+                      response["commandSocket"] as? Bool == true,
+                      validateCapabilitiesInstance(response["instance"]) else {
                     throw MoodBallCommandError.malformed
                 }
+                capabilitiesValidated = true
                 capabilitiesAvailable = true
                 let supports = response["supports"] as? [String] ?? []
                 taskListAvailable = supports.contains("tasks") && supports.contains("subscribeTasks")
                 imageAttachmentsAvailable = supports.contains("imageAttachments")
                 imageLimits = decodeImageLimits(response["attachmentLimits"])
-                if taskListAvailable { subscribeTasks() } else { tasks = [] }
-                if let sessionID { subscribe(to: sessionID) }
-                refreshWorkspaces()
+                if taskListAvailable { subscribeTasks(expectedGeneration: generation) } else { tasks = [] }
+                if let sessionID { subscribe(to: sessionID, expectedGeneration: generation) }
+                refreshWorkspaces(expectedGeneration: generation)
             } catch {
+                guard self.connectionGeneration == generation else { return }
                 capabilitiesAvailable = false
                 taskListAvailable = false
                 imageAttachmentsAvailable = false
@@ -726,9 +905,11 @@ final class MoodBallCommandClient: ObservableObject {
 
     private func scheduleReconnect() {
         guard started, reconnectTask == nil else { return }
+        let generation = connectionGeneration
         reconnectTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard let self, self.started else { return }
+            guard let self, !Task.isCancelled, self.started,
+                  self.connectionGeneration == generation else { return }
             self.reconnectTask = nil
             self.connect()
         }
@@ -756,6 +937,28 @@ final class MoodBallCommandClient: ObservableObject {
         guard let value,
               let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
         return try? JSONDecoder().decode(MoodBridgeSnapshot.self, from: data)
+    }
+
+    private func snapshotMatchesSelectedInstance(_ snapshot: MoodBridgeSnapshot) -> Bool {
+        guard let expectedInstanceID else { return true }
+        return snapshot.instanceId == expectedInstanceID
+    }
+
+    private func validateCapabilitiesInstance(_ value: Any?) -> Bool {
+        guard let targetInstance else {
+            // Legacy bridges predate instance metadata. A discovered
+            // descriptor must never be silently accepted as legacy, because
+            // that would make an HTTP/socket fallback cross origins.
+            return value == nil || allowLegacy
+        }
+        guard let descriptor = value as? [String: Any],
+              descriptor["instanceId"] as? String == targetInstance.instanceId,
+              descriptor["statusSocketPath"] as? String == targetInstance.statusSocketPath,
+              descriptor["commandSocketPath"] as? String == targetInstance.commandSocketPath else {
+            lastError = "Harness 来源身份校验失败，已停止发送"
+            return false
+        }
+        return true
     }
 
     private func decodeImageLimits(_ value: Any?) -> MoodBallImageLimits? {
@@ -862,32 +1065,44 @@ final class MoodBallCommandClient: ObservableObject {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
-    private func subscribeTasks() {
+    private func subscribeTasks(expectedGeneration: Int? = nil) {
+        let generation = expectedGeneration ?? connectionGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let response = try await request(action: "subscribeTasks", timeout: 12)
+                let response = try await request(
+                    action: "subscribeTasks",
+                    timeout: 12,
+                    expectedGeneration: generation
+                )
+                guard self.connectionGeneration == generation else { return }
                 applyTasks(response["tasks"])
             } catch {
+                guard self.connectionGeneration == generation else { return }
                 record(error)
             }
         }
     }
 
-    private func subscribe(to sessionID: String) {
+    private func subscribe(to sessionID: String, expectedGeneration: Int? = nil) {
+        let generation = expectedGeneration ?? connectionGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let response = try await request(
                     action: "subscribe",
                     fields: ["sessionId": sessionID],
-                    timeout: 8
+                    timeout: 8,
+                    expectedGeneration: generation
                 )
-                guard self.sessionID == sessionID else { return }
-                if let snapshot = decodeSnapshot(response["snapshot"]) {
+                guard self.connectionGeneration == generation,
+                      self.sessionID == sessionID else { return }
+                if let snapshot = decodeSnapshot(response["snapshot"]),
+                   snapshotMatchesSelectedInstance(snapshot) {
                     self.sessionSnapshot = snapshot
                 }
             } catch {
+                guard self.connectionGeneration == generation else { return }
                 record(error)
             }
         }

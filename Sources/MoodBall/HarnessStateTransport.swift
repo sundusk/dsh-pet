@@ -112,15 +112,18 @@ final class LocalSocketTransport: HarnessStateTransport {
     var onStateChanged: ((MoodBridgeSnapshot) -> Void)?
     var onConnectionChanged: ((TransportConnection) -> Void)?
 
-    private let socketPath: String
+    private var socketPath: String
+    private var expectedInstanceID: String?
     private let queue = DispatchQueue(label: "com.sundusk.moodball.local-transport")
     private var connection: NWConnection?
     private var retryTask: Task<Void, Never>?
     private var shouldReconnect = false
     private var buffer = Data()
+    private var hasValidatedInstance = false
 
-    init(socketPath: String = LocalSocketTransport.defaultSocketPath) {
+    init(socketPath: String = LocalSocketTransport.defaultSocketPath, expectedInstanceID: String? = nil) {
         self.socketPath = socketPath
+        self.expectedInstanceID = expectedInstanceID
     }
 
     nonisolated static var defaultSocketPath: String {
@@ -135,9 +138,20 @@ final class LocalSocketTransport: HarnessStateTransport {
         openConnection()
     }
 
+    /// Change the selected Harness endpoint without allowing callbacks from
+    /// the old connection to reach the new selection.
+    func reconfigure(socketPath: String, expectedInstanceID: String?) {
+        let wasRunning = shouldReconnect
+        disconnect()
+        self.socketPath = socketPath
+        self.expectedInstanceID = expectedInstanceID
+        if wasRunning { connect() }
+    }
+
     private func openConnection() {
         guard connection == nil else { return }
         buffer.removeAll(keepingCapacity: true)
+        hasValidatedInstance = false
         let connection = NWConnection(to: .unix(path: socketPath), using: .tcp)
         self.connection = connection
         connection.stateUpdateHandler = { [weak self] state in
@@ -145,8 +159,10 @@ final class LocalSocketTransport: HarnessStateTransport {
                 guard let self, self.connection === connection else { return }
                 switch state {
                 case .ready:
-                    self.isConnected = true
-                    self.onConnectionChanged?(.connected)
+                    if self.expectedInstanceID == nil {
+                        self.isConnected = true
+                        self.onConnectionChanged?(.connected)
+                    }
                     self.receiveNext(connection)
                 case .waiting, .failed, .cancelled:
                     self.connectionEnded(connection)
@@ -166,6 +182,7 @@ final class LocalSocketTransport: HarnessStateTransport {
         connection = nil
         previous?.cancel()
         buffer.removeAll(keepingCapacity: false)
+        hasValidatedInstance = false
         isConnected = false
     }
 
@@ -174,6 +191,7 @@ final class LocalSocketTransport: HarnessStateTransport {
         connection = nil
         ended.cancel()
         buffer.removeAll(keepingCapacity: false)
+        hasValidatedInstance = false
         isConnected = false
         onConnectionChanged?(.unavailable)
         guard shouldReconnect else { return }
@@ -207,6 +225,18 @@ final class LocalSocketTransport: HarnessStateTransport {
             buffer.removeSubrange(...newline)
             guard !line.isEmpty else { continue }
             if let snapshot = try? JSONDecoder().decode(MoodBridgeSnapshot.self, from: line) {
+                if let expectedInstanceID,
+                   snapshot.instanceId != expectedInstanceID {
+                    if let activeConnection = connection {
+                        connectionEnded(activeConnection)
+                    }
+                    return
+                }
+                if self.expectedInstanceID != nil && !hasValidatedInstance {
+                    hasValidatedInstance = true
+                    isConnected = true
+                    onConnectionChanged?(.connected)
+                }
                 onStateChanged?(snapshot)
             }
         }

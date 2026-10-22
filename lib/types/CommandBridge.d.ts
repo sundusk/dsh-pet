@@ -1,5 +1,6 @@
 import type { PromptContentPart } from '@deepseek-ai/dsh-api-session-controller';
 import type { MoodBridgePayload } from './LocalStateBridge.js';
+import type { HarnessInstanceDescriptor } from './HarnessInstance.js';
 type PromptImageMediaType = Extract<PromptContentPart, {
     type: 'image';
 }>['mediaType'];
@@ -79,12 +80,17 @@ export declare class CommandBridge {
     static defaultPath: string;
     private readonly socketPath;
     private readonly handlers;
+    private readonly instance;
     private readonly maxCommandBytes;
     private server;
     private ownsSocket;
     private clients;
-    constructor(handlers: CommandHandlers, socketPath?: string);
-    start(): void;
+    private probeGeneration;
+    private probing;
+    private socketIdentity;
+    constructor(handlers: CommandHandlers, socketPath?: string, instance?: HarnessInstanceDescriptor);
+    start(onReady?: () => void): void;
+    private listen;
     /** Push a replacement snapshot to clients subscribed to this session. */
     publish(sessionId: string, snapshot: MoodBridgePayload): void;
     /** Push a replacement task projection to clients that requested task updates. */

@@ -13,7 +13,7 @@ final class PetSizeTests: XCTestCase {
         settings.glowEnabled = false
         settings.showStatusBubble = false
         let model = MoodBallModel()
-        let view = MoodBallView(model: model, settings: settings, onOpenDesktopHarness: {})
+        let view = MoodBallView(model: model, settings: settings, onOpenHarness: {})
 
         for size: CGFloat in [60, 108, 200] {
             settings.ballSize = size

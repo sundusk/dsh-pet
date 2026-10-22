@@ -1,7 +1,7 @@
 <h1 align="center">DSH Pet</h1>
 
 <p align="center">
-  以小雨的像素形象，把 DeepSeek Harness 的 Agent 状态带到 macOS 桌面<br>
+  以鲸鱼娘的像素形象，把 DeepSeek Harness 的 Agent 状态带到 macOS 桌面<br>
   随时查看任务、接收提醒、发送消息
 </p>
 
@@ -19,21 +19,21 @@
 
 ## 这是什么？
 
-**DSH Pet** 是 DeepSeek Harness 的 macOS 桌面伴侣。它默认以小雨的形象显示 Agent 状态：
+**DSH Pet** 是 DeepSeek Harness 的 macOS 桌面伴侣。它默认以鲸鱼娘的形象显示 Agent 状态：
 待机、思考、等待授权或回答、完成和失败都有对应动作。你可以把桌宠拖到屏幕任意位置，
 通过状态气泡和任务卡片了解进度，也能直接从桌面向 Harness 发送消息；浏览器最小化后仍可使用。
 
-可在「设置 → 外观 → 桌宠」中选择小雨、新之助、鲸鱼娘或心情球。新之助和鲸鱼娘沿用本机 Codex 宠物的原始造型与动作，支持状态切换、点击挥手和左右拖拽奔跑。
+可在设置面板中选择鲸鱼娘、小雨、新之助或心情球。新之助和鲸鱼娘沿用本机 Codex 宠物的原始造型与动作，支持状态切换、点击挥手和左右拖拽奔跑。
 
 ### 项目组成
 
-- **DSH Pet.app**：以小雨为默认形象的 macOS 桌宠应用，也提供心情球皮肤
+- **DSH Pet.app**：以鲸鱼娘为默认形象的 macOS 桌宠应用，也提供小雨、新之助和心情球皮肤
 - **dsh-moodball-status**：状态与输入桥接插件（订阅 Agent 会话事件，提供 HTTP/状态 Socket 兼容接口，以及用户级命令 Socket；无 Harness Web UI、无设置项）
 
 插件包名和应用数据目录暂沿用 `dsh-moodball` / `MoodBall`，以兼容已有配置。安装脚本会清理旧版 `MoodBall.app`。
 当前版本为 **v0.6.2**，可从 [GitHub Releases](https://github.com/sundusk/dsh-pet/releases/latest) 下载 `DSH-Pet.app.zip`。安装脚本也会自动获取这个安装包。
 
-一切配置都在 app 的设置面板里完成。
+一切配置都在 app 的设置面板里完成。新版设置面板包含五个页面：「桌宠外观」「交互与提醒」「快捷键」「Harness 连接」和「关于与更新」。
 
 ### 小雨动作帧
 
@@ -75,7 +75,7 @@ pnpm run build
 pnpm dsh web
 ```
 
-两种方式默认在 `http://127.0.0.1:3080` 打开 Web UI。已有 DeepSeek Harness 桌面版的用户也可以继续使用桌面版；其插件安装步骤见下文。
+两种方式默认在 `http://127.0.0.1:3080` 打开 Web UI。已有 DeepSeek Harness 桌面版的用户也可以继续使用桌面版；其插件安装步骤见下文。加载新版 bridge 后，再从 DSH Pet 的「Harness 连接」页检测连接。
 
 ### 安装 DSH Pet（推荐）
 
@@ -113,7 +113,7 @@ DSH_SOURCE_ROOT="$HOME/Projects/deepseek-harness" bash install.sh
 
 如需自行构建，请先安装 Xcode 命令行工具，在本仓库运行 `MOODBALL_SKIP_OPEN=1 bash make-app.sh`，再运行 `bash install.sh`。
 
-桌面版使用独立的 `desktop` profile。请在桌面版「插件」页面安装并启用 `github:sundusk/dsh-pet`，再重启桌面版让插件加载。公开 `dsh plugin` CLI 不能管理桌面版 profile；安装器检测到桌面版时不会把插件误装到 `web` profile。DSH Pet 使用本地 Socket 接收桌面版状态；桌面版晚启动或重启后会自动重连。
+桌面版使用独立的 `desktop` profile。已有桌面版的「插件」页面流程仍有效：请在桌面版「插件」页面安装并启用 `github:sundusk/dsh-pet`，再重启桌面版让插件加载。官方内置 CLI 需先完成初始化，并退出桌面版后才可管理该 `desktop` profile；NPM/NPX CLI 不能管理桌面版 profile。安装器检测到桌面版时不会把插件误装到 `web` profile。DSH Pet 使用本地 Socket 接收桌面版状态；桌面版晚启动或重启后会自动重连。
 
 ### 手动安装桥接插件
 
@@ -130,12 +130,12 @@ dsh plugin --profile web add github:sundusk/dsh-pet
 pnpm dsh plugin --profile web add github:sundusk/dsh-pet
 ```
 
-桌面版请使用其「插件」页面；上面的 CLI 命令只针对 `web` profile。
+桌面版仍请使用其「插件」页面；官方内置 CLI 只有在完成初始化并退出桌面版后，才可管理 `desktop` profile；NPM/NPX CLI 只针对 `web` profile。加载新版 bridge 后，再回到 DSH Pet 的「Harness 连接」页重新检测。
 
 ## ✨ 使用
 
 安装并启动后，**桌面上没有任何窗口**——它是个纯菜单栏应用（不占 Dock、不抢焦点）：
-菜单栏右侧出现状态图标，桌面右下角出现小雨（或你选择的其他皮肤）。
+菜单栏右侧出现状态图标，桌面右下角出现鲸鱼娘（或你选择的其他皮肤）。
 
 ### 以后怎么打开？
 
@@ -155,12 +155,12 @@ pnpm dsh plugin --profile web add github:sundusk/dsh-pet
 
 - **拖动**：按住小雨拖动，她会朝拖动方向奔跑，并记住停留位置
 - **双击**：待机时小雨会挥手
-- **锁定位置**（设置面板 → 行为）开启后不可拖拽，仍可双击
+- **锁定位置**（设置面板 → 交互与提醒）开启后不可拖拽，仍可双击
 
 ### 第一阶段：快捷入口
 
 - 默认按 **Option+Space**，可在「设置 → 快捷键」重新录入组合键或关闭。快捷键冲突时 DSH Pet 不会抢占其他应用，并会在设置面板提示。
-- 「设置 → 快捷键」的“功能快捷键”区域可分别修改或关闭输入消息、新建会话、选择工作区、打开 Harness、显示/隐藏宠物、打开设置和状态展示的菜单快捷键；默认使用不冲突的 `⌘` 组合键。
+- 「设置 → 快捷键」的“菜单快捷键”区域可分别修改或关闭输入消息、新建会话、选择工作区、打开 Harness、显示/隐藏宠物和打开设置的菜单快捷键；默认使用不冲突的 `⌘` 组合键。
 - 快捷键会显示并聚焦输入框；输入框已打开时重复按下不会关闭、不清空草稿。按 Esc 收起输入框，中文输入法选字时 Enter 仍只确认候选文字。
 - 菜单栏“隐藏/显示宠物”同时控制桌宠及其操作栏。点击穿透设为“永远点击穿透”时，仍可通过全局快捷键唤起输入框。
 
@@ -168,10 +168,10 @@ pnpm dsh plugin --profile web add github:sundusk/dsh-pet
 
 宠物下方的短横条会在鼠标靠近时变成笔记按钮。点击后展开原生输入框：
 
-- 首次发送前选择 Harness 已注册的工作区，DSH Pet 会记住目标。
+- 先在「Harness 连接」页选择目标，再选择该 Harness 已注册的工作区；DSH Pet 会记住当前目标。
 - Enter 发送，Shift+Enter 换行；中文输入法选字时 Enter 只确认候选文字。
 - 第一条消息创建 DSH Pet 专用会话，后续消息沿用同一会话；执行中、等待授权或等待回答时暂时不能继续发送。
-- “新建会话”只解除当前绑定，不会删除或停止旧 Harness 任务；“打开 Harness”进入现有 Harness 首页。
+- “新建会话”只解除当前绑定，不会删除或停止旧 Harness 任务；“打开 Harness”进入当前选定 Harness 的首页。
 - 命令插件不可用时仍可显示旧版状态，但输入功能会明确禁用；草稿不会被静默丢弃。
 
 ### 第二阶段：多任务卡片与提醒
@@ -198,9 +198,9 @@ pnpm dsh plugin --profile web add github:sundusk/dsh-pet
 
 ### 桌宠皮肤
 
-设置面板 →「外观」→「桌宠」可即时切换：
+设置面板 →「桌宠外观」可即时切换：
 
-首次安装默认显示小雨；之后会记住你选择的宠物。
+首次安装默认显示鲸鱼娘；之后会记住你选择的宠物。
 
 - **小雨**：使用迁移自 Harness Desktop 的像素图集，支持待机、思考、授权、提问、完成、失败、挥手，以及左右拖拽奔跑。
 - **心情球**：保留原有呼吸、眨眼、气泡和状态颜色。
@@ -208,10 +208,10 @@ pnpm dsh plugin --profile web add github:sundusk/dsh-pet
 两种皮肤共用 Agent 状态、显隐、大小、气泡、发光、穿透和位置记忆设置。
 小雨的悬浮窗口按精灵和光晕收紧；状态气泡出现时才向上扩展，精灵之外的透明区域不会触发展开操作栏。
 
-### 状态展示
+### 状态预览与导出
 
-菜单栏 →「状态展示…」（⌘D）：查看每个状态下心情球的实时外观，可切换气泡文字的显示与隐藏，
-并可将当前状态保存为 PNG 图片。
+「设置 → 桌宠外观 → 效果预览」可切换状态；点击“放大 / 导出…”可预览四种宠物的全部状态，
+选择是否包含状态文字，并通过保存面板导出 512×512 透明背景 PNG。预览中的宠物和状态选择不会改变实际桌宠或任务。
 
 ### 心情球的颜色含义
 
@@ -231,14 +231,15 @@ pnpm dsh plugin --profile web add github:sundusk/dsh-pet
 
 ### 状态桥接与设置面板
 
-插件会优先向 `~/Library/Application Support/MoodBall/moodball.sock` 推送换行分隔的状态 JSON；本地桥接不可用时，app 自动回退到设置中的 HTTP 地址 `/api/moodball/status`，并继续尝试本地 Socket。桌面版的 Host 默认端口与 CLI Web 版不同，使用桌面版时以本地 Socket 为准。
-DSH Pet 的状态 Socket 只读；输入功能由独立的用户级命令 Socket 转发到官方 `workspaceRegistry` / `sessionController`。DSH Pet 不会启动、停止、升级或修改 Harness，也不模拟 Web UI。
+「Harness 连接」页会显示当前可发现的 Harness 实例，并统一选择状态与消息目标。只有一个实例时 DSH Pet 自动使用它；两个实例同时启动时，首次需要用户选择。目标确定后，另一个实例出现不会触发自动切换。
 
-菜单栏 →「设置…」可调整：球大小、呼吸速度、8 种状态颜色、眼睛开关与颜色、
-**气泡文字开关**、**发光开关**、**锁定位置**、API 地址、轮询间隔、点击穿透模式等，修改立即生效。
+新版 bridge 为每个运行实例提供同源的状态与命令通道，菜单、任务卡片和快捷键等打开入口都会跟随当前选定的 Harness。新版 bridge 必须先在目标 Harness 中加载，App 才能读取实例检测元信息；仅更新 DSH Pet App 不足以完成识别。
 
-「行为」Tab 底部还有**版本与更新**：显示当前版本，自动/手动检查 GitHub Releases
-是否有新版本，有则给出「前往下载」链接。
+旧版 bridge 没有来源身份时，DSH Pet 保留只读状态兼容，连接页显示「来源未知」，默认禁用发送并提示升级插件；旧版状态兼容不保证消息与状态来自同一 Harness。DSH Pet 不会启动、停止、升级或修改 Harness，也不模拟 Web UI。
+
+菜单栏 →「设置…」包含五个页面：「桌宠外观」「交互与提醒」「快捷键」「Harness 连接」和「关于与更新」。可在其中调整桌宠、交互行为、快捷入口、当前 Harness 目标和版本信息，修改立即生效。
+
+「关于与更新」页只检查 GitHub Releases 是否有新版本，有则提供「前往下载」链接，不自动安装。
 
 ### 卸载
 
@@ -253,7 +254,7 @@ bash uninstall.sh
 
 ### 常见问题
 
-- **小雨显示未连接，或心情球是灰色的？** 先确认目标 Harness 正在运行、状态插件已安装并启用。CLI 版检查 Web 服务与 `web` profile；桌面版检查应用内「插件」页面与 `desktop` profile，插件刚安装后需重启桌面版。
+- **鲸鱼娘显示未连接，或心情球是灰色的？** 先确认目标 Harness 正在运行，并确认新版 bridge 已在目标 Harness 中加载；仅更新 DSH Pet App 不足以完成实例检测。
 - **「设置 → 插件」里怎么没有 DSH Pet 插件卡片？** 这是正常的——桥接插件没有任何设置项
   （所有配置都在 app 的设置面板里），所以不显示配置卡片。可在「设置 → 插件 → **插件列表**」
   中查看它（状态为「已挂载」）。

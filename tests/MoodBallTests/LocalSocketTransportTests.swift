@@ -39,7 +39,47 @@ final class LocalSocketTransportTests: XCTestCase {
         XCTAssertTrue(transport.isConnected)
     }
 
-    private func startServer(at path: String) throws -> Int32 {
+    @MainActor
+    func testExplicitTransportWaitsForAndRequiresMatchingInstanceSnapshot() async throws {
+        let path = "/tmp/moodball-(UUID().uuidString.prefix(8)).sock"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let transport = LocalSocketTransport(socketPath: path, expectedInstanceID: "expected")
+        let connected = expectation(description: "validated connection")
+        var snapshots = 0
+        transport.onConnectionChanged = { status in
+            if status == .connected { connected.fulfill() }
+        }
+        transport.onStateChanged = { _ in snapshots += 1 }
+        transport.connect()
+        defer { transport.disconnect() }
+
+        var server: Int32? = try startServer(
+            at: path,
+            payload: "{\"instanceId\":\"wrong\",\"state\":\"idle\",\"mood\":\"idle\"}\n"
+        )
+        defer { if let server { Darwin.close(server) } }
+        try await Task.sleep(nanoseconds: 350_000_000)
+        XCTAssertFalse(transport.isConnected)
+        XCTAssertEqual(snapshots, 0)
+
+        transport.disconnect()
+        Darwin.close(server!)
+        server = nil
+        try? FileManager.default.removeItem(atPath: path)
+        let matchingServer = try startServer(
+            at: path,
+            payload: "{\"instanceId\":\"expected\",\"state\":\"idle\",\"mood\":\"idle\"}\n"
+        )
+        defer { Darwin.close(matchingServer) }
+        transport.connect()
+        await fulfillment(of: [connected], timeout: 5)
+        XCTAssertTrue(transport.isConnected)
+    }
+
+    private func startServer(
+        at path: String,
+        payload: String = "{\"state\":\"idle\",\"mood\":\"idle\"}\n"
+    ) throws -> Int32 {
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw POSIXError(.ENOTSOCK) }
 
@@ -67,8 +107,8 @@ final class LocalSocketTransportTests: XCTestCase {
         DispatchQueue.global().async {
             let client = Darwin.accept(descriptor, nil, nil)
             guard client >= 0 else { return }
-            let payload = Array("{\"state\":\"idle\",\"mood\":\"idle\"}\n".utf8)
-            payload.withUnsafeBytes { bytes in
+            let bytesToWrite = Array(payload.utf8)
+            bytesToWrite.withUnsafeBytes { bytes in
                 _ = Darwin.write(client, bytes.baseAddress, bytes.count)
             }
             Thread.sleep(forTimeInterval: 1)

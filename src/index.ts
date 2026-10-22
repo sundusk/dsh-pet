@@ -22,8 +22,24 @@ import {
   type MoodballWorkspace,
 } from './CommandBridge.js'
 import { LocalStateBridge, type MoodBridgePayload } from './LocalStateBridge.js'
+import {
+  createHarnessInstanceDescriptor,
+  HarnessInstanceManifest,
+  instanceDiscoveryDirectory,
+  refreshHarnessInstanceWebURL,
+  type HarnessInstanceDescriptor,
+} from './HarnessInstance.js'
 
 export { CommandBridge } from './CommandBridge.js'
+export { LocalStateBridge } from './LocalStateBridge.js'
+export {
+  createHarnessInstanceDescriptor,
+  HarnessInstanceManifest,
+  instanceDiscoveryDirectory,
+  instanceManifestPath,
+  refreshHarnessInstanceWebURL,
+} from './HarnessInstance.js'
+export type { HarnessInstanceDescriptor, HarnessInstanceKind } from './HarnessInstance.js'
 
 /** Stable cordis plugin name (matches cordis.patch.yml insert id). */
 export const name = 'moodball'
@@ -101,6 +117,33 @@ export function apply(ctx: Context): void {
   let refreshTaskSnapshot: (() => Promise<readonly MoodballTask[]>) | undefined
   let activeSessionId: string | undefined
   let commandBridge: CommandBridge | undefined
+  const instance: HarnessInstanceDescriptor = createHarnessInstanceDescriptor(ctx)
+  const instanceManifest = new HarnessInstanceManifest(
+    instance,
+    process.env.MOODBALL_INSTANCE_DIRECTORY ?? instanceDiscoveryDirectory(),
+  )
+  let statusReady = false
+  let commandReady = false
+  let originRetryTimer: ReturnType<typeof setTimeout> | undefined
+  let instanceManifestPublished = false
+  const publishInstanceManifest = (): void => {
+    if (!statusReady || !commandReady || instanceManifestPublished) return
+    const hasOriginGetter = typeof (ctx as unknown as { webServer?: { getOrigin?: unknown } }).webServer?.getOrigin === 'function'
+    if (instance.kind === 'web' && hasOriginGetter && !refreshHarnessInstanceWebURL(instance, ctx)) {
+      originRetryTimer ??= setTimeout(() => {
+        originRetryTimer = undefined
+        publishInstanceManifest()
+      }, 100)
+      return
+    }
+    refreshHarnessInstanceWebURL(instance, ctx)
+    try {
+      instanceManifest.publish()
+      instanceManifestPublished = true
+    } catch (error) {
+      console.warn(`[moodball] instance discovery unavailable: ${String(error)}`)
+    }
+  }
 
   const stateFor = (sessionId: string, workspaceId?: string): SessionMoodState => {
     const existing = sessionStates.get(sessionId)
@@ -127,6 +170,7 @@ export function apply(ctx: Context): void {
   }
 
   const snapshotOf = (state: SessionMoodState): MoodBridgePayload => ({
+    instanceId: instance.instanceId,
     state: stateForMood(state.mood),
     mood: state.mood,
     ...(state.sessionId ? { sessionId: state.sessionId } : {}),
@@ -148,7 +192,7 @@ export function apply(ctx: Context): void {
       ? snapshotOf(globalState)
       : snapshotForSession(activeSessionId)
 
-  const localBridge = new LocalStateBridge(snapshot)
+  const localBridge = new LocalStateBridge(snapshot, instance.statusSocketPath)
 
   const workspaceForSummary = (sessionId: string) => ctx.workspaceRegistry.list().find(workspace =>
     workspace.sessionIds.some(candidate => String(candidate) === sessionId),
@@ -402,7 +446,7 @@ export function apply(ctx: Context): void {
       return { accepted: true, sessionId: request.sessionId }
     }),
     snapshotFor: snapshotForSession,
-  })
+  }, instance.commandSocketPath, instance)
 
   refreshTaskSnapshot = async (): Promise<readonly MoodballTask[]> => {
     const listed = await ctx.sessionController.list({}, AbortSignal.timeout(15_000))
@@ -412,8 +456,16 @@ export function apply(ctx: Context): void {
   }
 
   ctx.effect(() => {
-    localBridge.start()
-    commandBridge?.start()
+    statusReady = false
+    commandReady = false
+    localBridge.start(() => {
+      statusReady = true
+      publishInstanceManifest()
+    })
+    commandBridge?.start(() => {
+      commandReady = true
+      publishInstanceManifest()
+    })
     void refreshTaskSnapshot?.().catch(error => {
       console.warn(`[moodball] initial task list unavailable: ${String(error)}`)
     })
@@ -422,6 +474,12 @@ export function apply(ctx: Context): void {
       taskRefreshTimer = undefined
       commandBridge?.stop()
       localBridge.stop()
+      if (originRetryTimer !== undefined) clearTimeout(originRetryTimer)
+      originRetryTimer = undefined
+      instanceManifest.remove()
+      instanceManifestPublished = false
+      statusReady = false
+      commandReady = false
     }
   }, 'moodball: local bridges')
 

@@ -16,7 +16,7 @@ import SwiftUI
 struct MoodBallView: View {
     @ObservedObject var model: MoodBallModel
     @ObservedObject var settings: SettingsStore
-    let onOpenDesktopHarness: () -> Void
+    let onOpenHarness: () -> Void
 
     /// 按下时鼠标与窗口原点的偏移（全局坐标），拖拽中保持不变
     @State private var grabOffset: CGSize = .zero
@@ -253,12 +253,12 @@ struct MoodBallView: View {
                     isTap = false
                 }
                 if isTap {
-                    // 双击（0.35s 内两次单击）→ 宠物动作 + 唤出桌面版；单击无操作
+                    // 双击（0.35s 内两次单击）→ 宠物动作 + 打开当前 Harness；单击无操作
                     let now = Date()
                     if let last = lastTapAt, now.timeIntervalSince(last) < 0.35 {
                         lastTapAt = nil
                         model.triggerWiggle()
-                        onOpenDesktopHarness()
+                        onOpenHarness()
                     } else {
                         lastTapAt = now
                     }

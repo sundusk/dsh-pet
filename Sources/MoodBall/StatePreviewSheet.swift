@@ -1,10 +1,11 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
-/// 状态展示面板：选择桌宠和状态，展示对应外观，
-/// 可切换显示/隐藏气泡文字，方便逐个状态截图用于 README 等文档。
-struct StatePreviewPanelView: View {
-    @ObservedObject private var settings = SettingsStore.shared
+/// Settings-only preview; pet and state selections never change the running pet.
+struct StatePreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var settings: SettingsStore
 
     /// 展示用状态列表（与 README 颜色含义一致；waving 是网页交互态，桌面球不含）
     private static let states: [(mood: String, label: String)] = [
@@ -19,12 +20,18 @@ struct StatePreviewPanelView: View {
         ("disconnected", "未连接"),
     ]
 
-    @State private var selectedMood = "idle"
-    @State private var selectedSkin = SettingsStore.shared.skin
+    @State private var selectedMood: String
+    @State private var selectedSkin: FloatingPetSkin
     /// 是否在桌宠上方显示气泡文字（默认关，便于截图）
     @State private var showText = false
     /// 导出 PNG 的反馈信息
     @State private var exportMessage: String?
+
+    init(settings: SettingsStore, skin: FloatingPetSkin, mood: String) {
+        self.settings = settings
+        _selectedMood = State(initialValue: mood)
+        _selectedSkin = State(initialValue: skin)
+    }
 
     private var selectedColor: Color {
         if selectedMood == "disconnected" {
@@ -61,7 +68,7 @@ struct StatePreviewPanelView: View {
         let mood = selectedMood
         let color = selectedColor
         let text = previewBubbleText
-        let canvas = PetWithBubble(skin: selectedSkin, mood: mood, color: color, size: 280, text: text)
+        let canvas = PetWithBubble(settings: settings, skin: selectedSkin, mood: mood, color: color, size: 280, text: text)
             .frame(width: 512, height: 512)
             .clipped()
 
@@ -74,20 +81,33 @@ struct StatePreviewPanelView: View {
             exportMessage = "导出失败"
             return
         }
-        let dir = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        let filename = "\(selectedSkin.rawValue.lowercased())-\(mood).png"
-        let url = dir.appendingPathComponent(filename)
-        do {
-            try png.write(to: url)
-            exportMessage = "已保存：桌面/\(filename)"
-        } catch {
-            exportMessage = "保存失败：\(error.localizedDescription)"
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = "\(selectedSkin.rawValue.lowercased())-\(mood).png"
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try png.write(to: url, options: .atomic)
+                exportMessage = "已保存：\(url.lastPathComponent)"
+            } catch {
+                exportMessage = "保存失败：\(error.localizedDescription)"
+            }
         }
     }
 
     var body: some View {
         VStack(spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("状态预览与导出").font(.title2.weight(.semibold))
+                    Text("只预览，不会改变桌宠或当前任务。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("完成") { dismiss() }
+            }
+            .padding(.bottom, 4)
             Picker("桌宠", selection: $selectedSkin) {
                 ForEach(FloatingPetSkin.allCases) { skin in
                     Text(skin.label).tag(skin)
@@ -98,7 +118,7 @@ struct StatePreviewPanelView: View {
             // 桌宠展示区：可选气泡文字
             ZStack {
                 Color.black.opacity(0.05)
-                PetWithBubble(skin: selectedSkin, mood: selectedMood, color: selectedColor, size: 130, text: previewBubbleText)
+                PetWithBubble(settings: settings, skin: selectedSkin, mood: selectedMood, color: selectedColor, size: 130, text: previewBubbleText)
             }
             .frame(maxWidth: .infinity)
             .frame(height: 300)
@@ -109,10 +129,10 @@ struct StatePreviewPanelView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("保存 PNG") { exportPNG() }
-                    .controlSize(.small)
-                Toggle(showText ? "隐藏文字" : "显示文字", isOn: $showText)
+                Toggle("包含状态文字", isOn: $showText)
                     .toggleStyle(.switch)
+                    .controlSize(.small)
+                Button("导出 PNG…") { exportPNG() }
                     .controlSize(.small)
             }
 
@@ -152,15 +172,16 @@ struct StatePreviewPanelView: View {
                 }
             }
         }
-        .padding(16)
-        .frame(width: 380)
+        .padding(24)
+        .frame(width: 500)
+        .preferredColorScheme(.light)
     }
 }
 
 /// 桌宠 + 可选气泡的组合。
 /// 预览（130px）与导出 PNG（280px）共用，保证所见即所存。
 private struct PetWithBubble: View {
-    @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject var settings: SettingsStore
     let skin: FloatingPetSkin
     let mood: String
     let color: Color
@@ -180,7 +201,7 @@ private struct PetWithBubble: View {
                     dragDirection: nil
                 )
             } else {
-                StateBallPreview(mood: mood, color: color, size: size)
+                StateBallPreview(settings: settings, mood: mood, color: color, size: size)
             }
             if let text {
                 SpeechBubble(text: text, color: color)
@@ -194,7 +215,7 @@ private struct PetWithBubble: View {
 /// 状态展示用的小球：与真实桌面球一致的渲染
 /// （外发光 + 渐变球体 + 高光 + 眼睛 + stopped 白环），静态满状态、无气泡文字。
 struct StateBallPreview: View {
-    @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject var settings: SettingsStore
     let mood: String
     let color: Color
     let size: CGFloat

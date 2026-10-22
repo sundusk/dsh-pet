@@ -185,6 +185,50 @@ final class MoodBallCommandClientTests: XCTestCase {
     }
 
     @MainActor
+    func testHarnessTargetSwitchKeepsDraftAndRejectsNewSource() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+        let first = harnessInstance(id: "first", profile: "desktop")
+        let second = harnessInstance(id: "second", profile: "web")
+
+        XCTAssertTrue(client.configure(instance: first, allowLegacy: false))
+        client.draft = "尚未发送"
+
+        XCTAssertFalse(client.configure(instance: second, allowLegacy: false))
+        XCTAssertEqual(client.draft, "尚未发送")
+        XCTAssertEqual(client.lastError, "请先处理当前草稿或未确认请求，再切换 Harness 来源")
+        XCTAssertEqual(client.targetBindingKey, first.bindingKey)
+    }
+
+    @MainActor
+    func testFirstIdentifiedTargetClearsUnownedWorkspaceButKeepsDraft() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+        let instance = harnessInstance(id: "first", profile: "desktop")
+        client.draft = "旧来源草稿"
+
+        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        XCTAssertEqual(client.draft, "旧来源草稿")
+        XCTAssertNil(client.selectedWorkspaceID)
+        XCTAssertEqual(client.continuationWarning, "Harness 来源已更新，请重新选择工作区")
+    }
+
+    @MainActor
+    func testHarnessRestartWithSameBindingDoesNotClearDraft() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+        let first = harnessInstance(id: "first", profile: "desktop")
+        let restarted = harnessInstance(id: "second", profile: "desktop")
+
+        XCTAssertTrue(client.configure(instance: first, allowLegacy: false))
+        client.draft = "保留草稿"
+
+        XCTAssertTrue(client.configure(instance: restarted, allowLegacy: false))
+        XCTAssertEqual(client.draft, "保留草稿")
+        XCTAssertEqual(client.targetBindingKey, restarted.bindingKey)
+    }
+
+    @MainActor
     private func makeClient(sessionID: String? = nil) -> (MoodBallCommandClient, () -> Void) {
         let suiteName = "MoodBallCommandClientTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -225,6 +269,21 @@ final class MoodBallCommandClientTests: XCTestCase {
             completed: completed,
             tool: nil,
             message: nil
+        )
+    }
+
+    private func harnessInstance(id: String, profile: String) -> HarnessInstance {
+        HarnessInstance(
+            protocolVersion: 1,
+            instanceId: id,
+            kind: profile == "desktop" ? .desktop : .web,
+            profile: profile,
+            pid: 999_999,
+            startedAt: 1,
+            webURL: profile == "web" ? "http://127.0.0.1:3080" : nil,
+            statusSocketPath: "/tmp/\(id)-status.sock",
+            commandSocketPath: "/tmp/\(id)-command.sock",
+            targetId: "profile-\(profile)"
         )
     }
 }

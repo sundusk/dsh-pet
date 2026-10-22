@@ -26,10 +26,10 @@ let disconnectedHex: UInt32 = 0x9ca3af
 // MARK: - 桌宠类型与通用设置
 
 enum FloatingPetSkin: String, CaseIterable, Identifiable {
-    case moodBall
+    case jingyuniang
     case xiaoyu
     case xinzhizhu
-    case jingyuniang
+    case moodBall
 
     var isSprite: Bool { self != .moodBall }
 
@@ -52,7 +52,6 @@ enum MoodBallShortcutAction: String, CaseIterable, Identifiable, Hashable {
     case openHarness
     case togglePetVisibility
     case openSettings
-    case statePreview
 
     var id: String { rawValue }
 
@@ -64,7 +63,6 @@ enum MoodBallShortcutAction: String, CaseIterable, Identifiable, Hashable {
         case .openHarness: return "打开 Harness"
         case .togglePetVisibility: return "显示 / 隐藏宠物"
         case .openSettings: return "打开设置"
-        case .statePreview: return "状态展示"
         }
     }
 
@@ -82,8 +80,6 @@ enum MoodBallShortcutAction: String, CaseIterable, Identifiable, Hashable {
             return GlobalHotKeyConfiguration(isEnabled: true, keyCode: 35, modifiers: [.command, .shift]) // ⌘⇧P
         case .openSettings:
             return GlobalHotKeyConfiguration(isEnabled: true, keyCode: 43, modifiers: [.command]) // ⌘,
-        case .statePreview:
-            return GlobalHotKeyConfiguration(isEnabled: true, keyCode: 2, modifiers: [.command]) // ⌘D
         }
     }
 }
@@ -351,9 +347,10 @@ final class PetSettings: ObservableObject {
         self.defaults = defaults
         let clamp = { (value: Double, lower: Double, upper: Double) in min(max(value, lower), upper) }
 
-        let initialSkin = FloatingPetSkin(rawValue: defaults.string(forKey: Key.skin) ?? "") ?? .xiaoyu
+        let savedSkin = defaults.string(forKey: Key.skin)
+        let initialSkin = savedSkin.flatMap { FloatingPetSkin(rawValue: $0) } ?? .jingyuniang
         skin = initialSkin
-        if defaults.object(forKey: Key.skin) == nil {
+        if savedSkin != initialSkin.rawValue {
             defaults.set(initialSkin.rawValue, forKey: Key.skin)
         }
         ballSize = CGFloat(clamp(Self.number(defaults, for: Key.ballSize, legacy: LegacyKey.ballSize) ?? 120, 60, 200))

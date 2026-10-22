@@ -57,6 +57,7 @@ final class MoodBallModel: ObservableObject {
     @Published private(set) var composerInputHeight: CGFloat = 38
 
     let commandClient = MoodBallCommandClient()
+    let harnessConnections = HarnessConnectionManager()
 
     /// Menu bar status text includes the active transport without exposing its
     /// implementation to the views.
@@ -85,13 +86,14 @@ final class MoodBallModel: ObservableObject {
     private var settingsCancellable: AnyCancellable?
     private var commandSnapshotCancellable: AnyCancellable?
     private var didStart = false
+    private var configuredHarnessID: String?
 
     init() {
         bridge = MoodBridge()
-        bridgeCancellable = Publishers.CombineLatest(bridge.$snapshot, bridge.$connection)
+        bridgeCancellable = Publishers.CombineLatest3(bridge.$snapshot, bridge.$connection, bridge.$transportKind)
             .receive(on: RunLoop.main)
-            .sink { [weak self] snapshot, connection in
-                self?.transportKind = self?.bridge.transportKind ?? .disconnected
+            .sink { [weak self] snapshot, connection, kind in
+                self?.transportKind = kind
                 self?.apply(snapshot, connection: connection)
             }
         commandSnapshotCancellable = commandClient.$sessionSnapshot
@@ -107,6 +109,13 @@ final class MoodBallModel: ObservableObject {
         commandClient.onAccepted = { [weak self] in
             self?.barPhase = .resting
         }
+        harnessConnections.onTargetChange = { [weak self] instance in
+            self?.configureHarness(instance) ?? false
+        }
+        harnessConnections.onRefresh = { [weak self] in
+            guard let self else { return }
+            _ = self.configureHarness(self.harnessConnections.effectiveInstance)
+        }
     }
 
     func start() {
@@ -120,8 +129,7 @@ final class MoodBallModel: ObservableObject {
                 self.bridge.updateHTTPConfiguration(settings: settings)
             }
         bridge.updateHTTPConfiguration(settings: settings)
-        bridge.start()
-        commandClient.start()
+        harnessConnections.start()
     }
 
     func stop() {
@@ -131,6 +139,8 @@ final class MoodBallModel: ObservableObject {
         settingsCancellable = nil
         bridge.stop()
         commandClient.stop()
+        harnessConnections.stop()
+        configuredHarnessID = nil
     }
 
     func triggerWiggle() {
@@ -213,10 +223,35 @@ final class MoodBallModel: ObservableObject {
     }
 
     func openHarness() {
-        let raw = SettingsStore.shared.apiBase.trimmingCharacters(in: .whitespacesAndNewlines)
-        let url = URL(string: raw.isEmpty ? "http://127.0.0.1:3080" : raw)
-            ?? URL(string: "http://127.0.0.1:3080")!
-        NSWorkspace.shared.open(url)
+        harnessConnections.open(
+            legacyWebAddress: SettingsStore.shared.apiBase,
+            legacyConnected: connected && transportKind == .http
+        )
+    }
+
+    func selectHarnessTarget(_ id: String) {
+        _ = harnessConnections.select(id)
+    }
+
+    func refreshHarnessConnections() {
+        harnessConnections.refresh()
+        _ = configureHarness(harnessConnections.effectiveInstance, force: true)
+    }
+
+    @discardableResult
+    private func configureHarness(_ instance: HarnessInstance?, force: Bool = false) -> Bool {
+        guard didStart else { return true }
+        let legacy = instance == nil && harnessConnections.instances.isEmpty
+            && harnessConnections.selectionID == "auto"
+        let id = instance?.id ?? (legacy ? "legacy-read-only" : "none")
+        guard force || id != configuredHarnessID else { return true }
+        // Source-less legacy sockets cannot prove that status and commands have the same owner.
+        guard commandClient.configure(instance: instance, allowLegacy: false) else { return false }
+        bridge.configure(instance: instance, allowLegacy: legacy)
+        if instance != nil { commandClient.start() }
+        if instance != nil || legacy { bridge.start() }
+        configuredHarnessID = id
+        return true
     }
 
     private func apply(_ snapshot: MoodBridgeSnapshot, connection: TransportConnection) {

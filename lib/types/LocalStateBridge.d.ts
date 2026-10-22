@@ -1,5 +1,6 @@
 /** The newline-delimited local bridge payload shared with MoodBall.app. */
 export interface MoodBridgePayload {
+    instanceId?: string;
     state: string;
     mood: string;
     sessionId?: string;
@@ -26,8 +27,12 @@ export declare class LocalStateBridge {
     private server;
     private clients;
     private ownsSocket;
+    private probeGeneration;
+    private probing;
+    private socketIdentity;
     constructor(readSnapshot: () => MoodBridgePayload, socketPath?: string);
-    start(): void;
+    start(onReady?: () => void): void;
+    private listen;
     publish(): void;
     stop(): void;
     private write;

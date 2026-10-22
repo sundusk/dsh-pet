@@ -8,6 +8,9 @@
  */
 import { Context } from '@deepseek-ai/cordis';
 export { CommandBridge } from './CommandBridge.js';
+export { LocalStateBridge } from './LocalStateBridge.js';
+export { createHarnessInstanceDescriptor, HarnessInstanceManifest, instanceDiscoveryDirectory, instanceManifestPath, refreshHarnessInstanceWebURL, } from './HarnessInstance.js';
+export type { HarnessInstanceDescriptor, HarnessInstanceKind } from './HarnessInstance.js';
 /** Stable cordis plugin name (matches cordis.patch.yml insert id). */
 export declare const name = "moodball";
 /** Services required before the status surface can mount. */

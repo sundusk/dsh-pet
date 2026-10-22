@@ -497,7 +497,87 @@ plugin_is_installed() {
     return 1
 }
 
+# ---------------------------------------------------------------------------
+# The instance manifest is the authoritative discovery path for new plugin
+# instances. Keep the legacy socket probe below as a compatibility fallback.
+instance_manifest_record() {
+    local manifest="$1"
+    local protocol_version pid kind status_socket command_socket
+
+    if command -v node >/dev/null 2>&1; then
+        node -e '
+const fs = require("fs")
+const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
+if (manifest.protocolVersion !== 1 || !Number.isInteger(manifest.pid)) process.exit(1)
+const fields = [manifest.pid, manifest.kind, manifest.statusSocketPath, manifest.commandSocketPath]
+if (fields.slice(1).some(value => typeof value !== "string" || value.includes("\n") || value.includes("\t"))) process.exit(1)
+process.stdout.write(fields.join("\t"))
+' "$manifest" 2>/dev/null
+        return $?
+    fi
+
+    # macOS ships plutil even on machines without Node (notably Desktop-only
+    # installs), so retain a parser that does not depend on the CLI runtime.
+    command -v plutil >/dev/null 2>&1 || return 1
+    if ! protocol_version=$(plutil -extract protocolVersion raw -o - "$manifest" 2>/dev/null) || \
+       ! pid=$(plutil -extract pid raw -o - "$manifest" 2>/dev/null) || \
+       ! kind=$(plutil -extract kind raw -o - "$manifest" 2>/dev/null) || \
+       ! status_socket=$(plutil -extract statusSocketPath raw -o - "$manifest" 2>/dev/null) || \
+       ! command_socket=$(plutil -extract commandSocketPath raw -o - "$manifest" 2>/dev/null); then
+        return 1
+    fi
+    [ "$protocol_version" = "1" ] || return 1
+    case "$kind$status_socket$command_socket" in
+        *$'\n'*|*$'\t'*) return 1 ;;
+    esac
+    printf '%s\t%s\t%s\t%s' "$pid" "$kind" "$status_socket" "$command_socket"
+}
+
+instance_kind_matches_harness() {
+    case "$HARNESS_TYPE:$1" in
+        desktop:desktop|source:web|npm:web|web:web) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+instance_socket_probe() {
+    local socket_path="$1"
+    [ -S "$socket_path" ] || return 1
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -a -p "$HARNESS_PID" -U -Fn 2>/dev/null | grep -Fx "n$socket_path" >/dev/null
+        return $?
+    fi
+    if command -v nc >/dev/null 2>&1; then
+        nc -w 1 -U "$socket_path" </dev/null >/dev/null 2>&1
+        return $?
+    fi
+    return 1
+}
+
+instance_manifest_is_active() {
+    local manifest_dir manifest record manifest_pid manifest_kind status_socket command_socket
+    [ "$HARNESS_RUNNING" -eq 1 ] || return 1
+    [ -n "$HARNESS_PID" ] || return 1
+
+    manifest_dir="${MOODBALL_INSTANCE_DIRECTORY:-$HOME/Library/Application Support/MoodBall/instances}"
+    [ -d "$manifest_dir" ] || return 1
+    for manifest in "$manifest_dir"/*.json; do
+        [ -f "$manifest" ] || continue
+        record=$(instance_manifest_record "$manifest" 2>/dev/null) || continue
+        IFS=$'\t' read -r manifest_pid manifest_kind status_socket command_socket <<< "$record"
+        [ "$manifest_pid" = "$HARNESS_PID" ] || continue
+        instance_kind_matches_harness "$manifest_kind" || continue
+        instance_socket_probe "$status_socket" || continue
+        instance_socket_probe "$command_socket" || continue
+        return 0
+    done
+    return 1
+}
+
 socket_is_active() {
+    if instance_manifest_is_active; then
+        return 0
+    fi
     [ -S "$SOCKET_PATH" ] || return 1
     if [ "$HARNESS_TYPE" = "desktop" ]; then
         # A CLI Web process may own the same path. Attribute it to Desktop only

@@ -54,6 +54,7 @@ struct AgentSessionState: Codable, Equatable, Identifiable {
 
 /// Version-tolerant payload shared by HTTP and the local Unix socket.
 struct MoodBridgeSnapshot: Codable, Equatable {
+    let instanceId: String?
     let state: AgentState
     let mood: String
     let sessionId: String?
@@ -67,6 +68,7 @@ struct MoodBridgeSnapshot: Codable, Equatable {
     let updatedAt: TimeInterval
 
     static let disconnected = MoodBridgeSnapshot(
+        instanceId: nil,
         state: .disconnected,
         mood: "disconnected",
         sessionId: nil,
@@ -81,6 +83,7 @@ struct MoodBridgeSnapshot: Codable, Equatable {
     )
 
     init(
+        instanceId: String? = nil,
         state: AgentState,
         mood: String? = nil,
         sessionId: String? = nil,
@@ -93,6 +96,7 @@ struct MoodBridgeSnapshot: Codable, Equatable {
         message: String? = nil,
         updatedAt: TimeInterval = Date().timeIntervalSince1970
     ) {
+        self.instanceId = instanceId
         self.state = state
         self.mood = mood ?? state.mood
         self.sessionId = sessionId
@@ -107,7 +111,7 @@ struct MoodBridgeSnapshot: Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case state, mood, sessionId, workspaceId, taskRunning, waitingForUser, failed, completed, tool, message, updatedAt
+        case instanceId, state, mood, sessionId, workspaceId, taskRunning, waitingForUser, failed, completed, tool, message, updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -116,6 +120,7 @@ struct MoodBridgeSnapshot: Codable, Equatable {
         let decodedState = try values.decodeIfPresent(AgentState.self, forKey: .state)
             ?? AgentState.fromMood(rawMood)
         self.init(
+            instanceId: try values.decodeIfPresent(String.self, forKey: .instanceId),
             state: decodedState,
             mood: rawMood,
             sessionId: try values.decodeIfPresent(String.self, forKey: .sessionId),

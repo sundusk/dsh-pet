@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,6 +23,24 @@ function waitForServer(path) {
     }
     attempt()
   })
+}
+
+async function waitForManifest(directory) {
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    try {
+      const names = await readdir(directory)
+      for (const name of names) {
+        if (!name.endsWith('.json')) continue
+        const descriptor = JSON.parse(await readFile(join(directory, name), 'utf8'))
+        if (descriptor.pid === process.pid && descriptor.protocolVersion === 1) return descriptor
+      }
+    } catch {
+      // The plugin publishes only after both sockets are listening.
+    }
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  throw new Error('plugin instance manifest did not start')
 }
 
 function nextJsonLine(socket) {
@@ -49,12 +67,15 @@ async function command(socket, nextLine, id, action, fields = {}) {
 
 test('plugin adapter calls official-style workspace and session services', async () => {
   const root = await mkdtemp(join(tmpdir(), 'moodball-plugin-'))
+  const instanceDirectory = join(root, 'instances')
   const statusPath = join(root, 'status.sock')
   const commandPath = join(root, 'command.sock')
   const previousStatusPath = process.env.MOODBALL_SOCKET_PATH
   const previousCommandPath = process.env.MOODBALL_COMMAND_SOCKET_PATH
+  const previousInstanceDirectory = process.env.MOODBALL_INSTANCE_DIRECTORY
   process.env.MOODBALL_SOCKET_PATH = statusPath
   process.env.MOODBALL_COMMAND_SOCKET_PATH = commandPath
+  process.env.MOODBALL_INSTANCE_DIRECTORY = instanceDirectory
 
   let eventHandler
   let statusRoute
@@ -123,7 +144,11 @@ test('plugin adapter calls official-style workspace and session services', async
   try {
     const plugin = await import('../lib/index.js')
     plugin.apply(ctx)
-    const socket = await waitForServer(commandPath)
+    const instance = await waitForManifest(instanceDirectory)
+    assert.equal(instance.kind, 'unknown')
+    assert.equal(instance.statusSocketPath.endsWith('-s.sock'), true)
+    assert.equal(instance.commandSocketPath.endsWith('-c.sock'), true)
+    const socket = await waitForServer(instance.commandSocketPath)
     const nextLine = nextJsonLine(socket)
 
     const listed = await command(socket, nextLine, 'list', 'workspaces')
@@ -187,6 +212,7 @@ test('plugin adapter calls official-style workspace and session services', async
     )
     assert.equal(routeBody.ok, true)
     assert.equal(routeBody.sessionId, 'moodball-session-test')
+    assert.equal(routeBody.instanceId, instance.instanceId)
     socket.destroy()
   } finally {
     for (const cleanup of cleanups.reverse()) cleanup()
@@ -194,6 +220,8 @@ test('plugin adapter calls official-style workspace and session services', async
     else process.env.MOODBALL_SOCKET_PATH = previousStatusPath
     if (previousCommandPath === undefined) delete process.env.MOODBALL_COMMAND_SOCKET_PATH
     else process.env.MOODBALL_COMMAND_SOCKET_PATH = previousCommandPath
+    if (previousInstanceDirectory === undefined) delete process.env.MOODBALL_INSTANCE_DIRECTORY
+    else process.env.MOODBALL_INSTANCE_DIRECTORY = previousInstanceDirectory
     await rm(root, { recursive: true, force: true })
   }
 })
