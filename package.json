@@ -1,7 +1,7 @@
 {
   "name": "@sundusk/dsh-moodball-status",
   "description": "DeepSeek Harness Agent status bridge for the DSH Pet macOS desktop pets: a host-only plugin with HTTP compatibility and a local Unix socket transport.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "repository": {
     "type": "git",
