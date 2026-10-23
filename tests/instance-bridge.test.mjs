@@ -5,6 +5,7 @@ import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { Context } from '@deepseek-ai/cordis'
 import {
   CommandBridge,
   createHarnessInstanceDescriptor,
@@ -21,6 +22,33 @@ const limits = {
   maxImageDimension: 10,
   mediaTypes: ['image/png'],
 }
+
+test('descriptor reads optional hints inside a real Cordis plugin context', async () => {
+  const root = new Context()
+  const profileContext = {
+    name: 'desktop',
+    dir: '/Users/example/.dsh/profiles/desktop',
+    home: '/Users/example/.dsh',
+  }
+  let descriptor
+  const plugin = { apply: ctx => { descriptor = createHarnessInstanceDescriptor(ctx) } }
+  const withoutProfile = root.plugin(plugin)
+  await withoutProfile
+  assert.equal(descriptor.kind, 'unknown')
+  assert.equal(descriptor.targetId, undefined)
+  await withoutProfile.dispose()
+
+  root.provide('profileContext', profileContext)
+  const withProfile = root.plugin(plugin)
+  try {
+    await withProfile
+    assert.equal(descriptor.kind, 'desktop')
+    assert.equal(descriptor.profile, 'desktop')
+    assert.equal(descriptor.targetId, createHarnessInstanceDescriptor({ profileContext }).targetId)
+  } finally {
+    await withProfile.dispose()
+  }
+})
 
 test('descriptor uses explicit profile evidence and emits only loopback origins', () => {
   const desktop = createHarnessInstanceDescriptor({ profile: 'desktop' })

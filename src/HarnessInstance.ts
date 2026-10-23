@@ -59,22 +59,22 @@ interface HarnessContextHints {
  */
 export function createHarnessInstanceDescriptor(context?: unknown): HarnessInstanceDescriptor {
   const hints = context as HarnessContextHints | undefined
+  const profileContext = readHint(hints, 'profileContext')
+  const resolvedProfile = readHint(hints, 'resolvedProfile')
   const profileValue = firstNonEmptyString(
     process.env.MOODBALL_PROFILE,
     process.env.DSH_PROFILE,
-    hints?.profileContext?.name,
-    hints?.profile,
-    hints?.resolvedProfile?.profile,
+    profileContext?.name,
+    readHint(hints, 'profile'),
+    resolvedProfile?.profile,
     profileFromArgv(),
-    readServiceString(hints, 'profile'),
-    readServiceObject(hints, 'profileContext')?.name,
   )
-  const profile = profileValue ?? profileName(hints?.resolvedProfile?.profile)
+  const profile = profileValue ?? profileName(resolvedProfile?.profile)
   const explicitKind = normalizeKind(firstNonEmptyString(
     process.env.MOODBALL_HARNESS_KIND,
     process.env.MOODBALL_HARNESS_TYPE,
-    hints?.kind,
-    hints?.type,
+    readHint(hints, 'kind'),
+    readHint(hints, 'type'),
     readServiceString(hints, 'harnessKind'),
   ))
   const kind: HarnessInstanceKind = explicitKind
@@ -174,18 +174,18 @@ function normalizeKind(value: string | undefined): HarnessInstanceKind | undefin
   return undefined
 }
 
-function readServiceString(context: HarnessContextHints | undefined, name: string): string | undefined {
+function readHint<K extends keyof HarnessContextHints>(context: HarnessContextHints | undefined, name: K): HarnessContextHints[K] | undefined {
   try {
-    return context?.get?.(name, false) as string | undefined
+    // Cordis throws on undeclared property reads, even with optional chaining.
+    return (context?.get?.(name, false) ?? context?.[name]) as HarnessContextHints[K] | undefined
   } catch {
     return undefined
   }
 }
 
-function readServiceObject(context: HarnessContextHints | undefined, name: string): HarnessContextHints | undefined {
+function readServiceString(context: HarnessContextHints | undefined, name: string): string | undefined {
   try {
-    const value = context?.get?.(name, false)
-    return value !== null && typeof value === 'object' ? value as HarnessContextHints : undefined
+    return context?.get?.(name, false) as string | undefined
   } catch {
     return undefined
   }
@@ -200,14 +200,14 @@ function profileFromArgv(): string | undefined {
 
 function contextOrigin(context: HarnessContextHints | undefined): string | undefined {
   try {
-    return context?.webServer?.getOrigin?.()
+    return readHint(context, 'webServer')?.getOrigin?.()
   } catch {
     return undefined
   }
 }
 
 function contextWebURL(context: HarnessContextHints | undefined): string | undefined {
-  const server = context?.webServer
+  const server = readHint(context, 'webServer')
   if (server === undefined) return undefined
   const protocol = typeof server.protocol === 'string' ? server.protocol : undefined
   const host = firstNonEmptyString(server.host, server.hostname)
@@ -225,17 +225,16 @@ function profileName(value: unknown): string | undefined {
 function targetIdentity(profile: string | undefined, context: HarnessContextHints | undefined): string | undefined {
   const explicit = firstNonEmptyString(process.env.MOODBALL_TARGET_ID, readServiceString(context, 'targetId'))
   if (explicit !== undefined) return explicit
-  const profileContext = readServiceObject(context, 'profileContext')
-  const profileObject = context?.resolvedProfile?.profile
+  const profileContext = readHint(context, 'profileContext')
+  const profileObject = readHint(context, 'resolvedProfile')?.profile
   const profileDir = firstNonEmptyString(
-    context?.profileContext?.dir,
     profileContext?.dir,
-    context?.profileDir,
+    readHint(context, 'profileDir'),
     profileObject !== null && typeof profileObject === 'object'
       ? (profileObject as { dir?: unknown }).dir
       : undefined,
   )
-  const home = firstNonEmptyString(process.env.DSH_HOME, context?.profileContext?.home, profileContext?.home, context?.home)
+  const home = firstNonEmptyString(process.env.DSH_HOME, profileContext?.home, readHint(context, 'home'))
   const source = profileDir ?? (home !== undefined && profile !== undefined ? `${home}\u0000${profile}` : undefined)
   if (source === undefined) return undefined
   return `target-${createHash('sha256').update(source).digest('hex').slice(0, 16)}`
