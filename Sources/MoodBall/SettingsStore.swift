@@ -25,11 +25,37 @@ let disconnectedHex: UInt32 = 0x9ca3af
 
 // MARK: - 桌宠类型与通用设置
 
-enum FloatingPetSkin: String, CaseIterable, Identifiable {
+enum FloatingPetSkin: RawRepresentable, CaseIterable, Identifiable, Hashable {
     case jingyuniang
     case xiaoyu
     case xinzhizhu
     case moodBall
+    case custom(String)
+
+    static let allCases: [Self] = [.jingyuniang, .xiaoyu, .xinzhizhu, .moodBall]
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "jingyuniang": self = .jingyuniang
+        case "xiaoyu": self = .xiaoyu
+        case "xinzhizhu": self = .xinzhizhu
+        case "moodBall": self = .moodBall
+        default:
+            guard rawValue.hasPrefix("custom:"),
+                  let id = UUID(uuidString: String(rawValue.dropFirst(7))) else { return nil }
+            self = .custom(id.uuidString.lowercased())
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .jingyuniang: return "jingyuniang"
+        case .xiaoyu: return "xiaoyu"
+        case .xinzhizhu: return "xinzhizhu"
+        case .moodBall: return "moodBall"
+        case .custom(let id): return "custom:\(id)"
+        }
+    }
 
     var isSprite: Bool { self != .moodBall }
 
@@ -41,6 +67,7 @@ enum FloatingPetSkin: String, CaseIterable, Identifiable {
         case .xiaoyu: return "小雨"
         case .xinzhizhu: return "新之助"
         case .jingyuniang: return "鲸鱼娘"
+        case .custom: return "自定义宠物"
         }
     }
 }
@@ -343,12 +370,16 @@ final class PetSettings: ObservableObject {
         defaults.set(Int(configuration.modifiers.rawValue), forKey: prefix + ".modifiers")
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, petLibrary: CustomPetLibrary? = nil) {
         self.defaults = defaults
+        let petLibrary = petLibrary ?? .shared
         let clamp = { (value: Double, lower: Double, upper: Double) in min(max(value, lower), upper) }
 
         let savedSkin = defaults.string(forKey: Key.skin)
-        let initialSkin = savedSkin.flatMap { FloatingPetSkin(rawValue: $0) } ?? .jingyuniang
+        var initialSkin = savedSkin.flatMap { FloatingPetSkin(rawValue: $0) } ?? .jingyuniang
+        if case .custom = initialSkin, !petLibrary.pets.contains(where: { $0.skin == initialSkin }) {
+            initialSkin = .jingyuniang
+        }
         skin = initialSkin
         if savedSkin != initialSkin.rawValue {
             defaults.set(initialSkin.rawValue, forKey: Key.skin)

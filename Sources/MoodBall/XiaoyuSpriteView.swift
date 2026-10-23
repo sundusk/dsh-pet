@@ -133,7 +133,11 @@ enum XiaoyuAnimation: String, CaseIterable {
     }
 
     func frameIndex(elapsed: TimeInterval, frameCount: Int? = nil) -> Int {
-        let frameDurations = Array(self.frameDurations.prefix(frameCount ?? self.frameDurations.count))
+        let count = frameCount ?? self.frameDurations.count
+        var frameDurations = Array(self.frameDurations.prefix(count))
+        if count > frameDurations.count, let duration = frameDurations.last {
+            frameDurations += Array(repeating: duration, count: count - frameDurations.count)
+        }
         let totalDuration = frameDurations.reduce(0, +)
         guard !frameDurations.isEmpty else { return 0 }
         let safeElapsed = max(0, elapsed)
@@ -192,6 +196,10 @@ struct XiaoyuSpriteAtlas {
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw XiaoyuSpriteAtlasError.unreadableImage
         }
+        return try decodeCells(image: image, rows: rows)
+    }
+
+    static func decodeCells(image: CGImage, rows: Int) throws -> [[CGImage]] {
         let expectedHeight = rows * Self.cellHeight
         guard image.width == Self.pixelWidth, image.height == expectedHeight else {
             throw XiaoyuSpriteAtlasError.invalidDimensions(width: image.width, height: image.height)
@@ -262,6 +270,8 @@ struct XiaoyuSpriteView: View {
     let glowEnabled: Bool
     let interactionTriggeredAt: Date?
     let dragDirection: XiaoyuDragDirection?
+    @ObservedObject private var petLibrary = CustomPetLibrary.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var stateStartedAt = Date()
     @State private var dragStartedAt = Date()
@@ -278,13 +288,14 @@ struct XiaoyuSpriteView: View {
         switch skin {
         case .xinzhizhu: return Self.xinzhizhuAtlas
         case .jingyuniang: return Self.jingyuniangAtlas
+        case .custom: return petLibrary.atlas(for: skin)
         default: return nil
         }
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: XiaoyuAnimation.renderInterval)) { timeline in
-            let selection = frameSelection(at: timeline.date)
+        TimelineView(.animation(minimumInterval: XiaoyuAnimation.renderInterval, paused: reduceMotion)) { timeline in
+            let selection = frameSelection(at: reduceMotion ? stateStartedAt : timeline.date)
 
             ZStack(alignment: .bottom) {
                 if glowEnabled {
@@ -341,7 +352,7 @@ struct XiaoyuSpriteView: View {
     private func frameSelection(at date: Date) -> (frame: CGImage?, displayScale: CGFloat) {
         if let dragDirection {
             let elapsed = date.timeIntervalSince(dragStartedAt)
-            if skin == .xinzhizhu || skin == .jingyuniang {
+            if skin != .xiaoyu {
                 return (codexAtlas?.dragFrame(for: dragDirection, elapsed: elapsed), 1)
             }
             return (
@@ -362,7 +373,7 @@ struct XiaoyuSpriteView: View {
         let elapsed = waveActive
             ? date.timeIntervalSince(interactionTriggeredAt ?? date)
             : date.timeIntervalSince(stateStartedAt)
-        if skin == .xinzhizhu || skin == .jingyuniang {
+        if skin != .xiaoyu {
             return (codexAtlas?.frame(for: animation, elapsed: elapsed), 1)
         }
         return (

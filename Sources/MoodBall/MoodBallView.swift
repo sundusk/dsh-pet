@@ -70,7 +70,7 @@ struct MoodBallView: View {
                 case .moodBall:
                     moodBallArtwork(diameter: d)
                         .contentShape(Circle())
-                case .xiaoyu, .xinzhizhu, .jingyuniang:
+                case .xiaoyu, .xinzhizhu, .jingyuniang, .custom:
                     XiaoyuSpriteView(
                         skin: settings.skin,
                         mood: model.mood,
@@ -179,7 +179,7 @@ struct MoodBallView: View {
         switch settings.skin {
         case .moodBall:
             return diameter / 2
-        case .xiaoyu, .xinzhizhu, .jingyuniang:
+        case .xiaoyu, .xinzhizhu, .jingyuniang, .custom:
             return diameter
         }
     }

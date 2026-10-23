@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct StatePreviewSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var settings: SettingsStore
+    @ObservedObject private var petLibrary = CustomPetLibrary.shared
 
     /// 展示用状态列表（与 README 颜色含义一致；waving 是网页交互态，桌面球不含）
     private static let states: [(mood: String, label: String)] = [
@@ -109,11 +110,11 @@ struct StatePreviewSheet: View {
             }
             .padding(.bottom, 4)
             Picker("桌宠", selection: $selectedSkin) {
-                ForEach(FloatingPetSkin.allCases) { skin in
-                    Text(skin.label).tag(skin)
+                ForEach(FloatingPetSkin.allCases + petLibrary.pets.map(\.skin)) { skin in
+                    Text(petLibrary.displayName(for: skin)).tag(skin)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
 
             // 桌宠展示区：可选气泡文字
             ZStack {

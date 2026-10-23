@@ -9,12 +9,14 @@ struct SettingsPanelView: View {
     @ObservedObject var model: MoodBallModel
     @ObservedObject private var settings: SettingsStore
     @ObservedObject private var connections: HarnessConnectionManager
+    @ObservedObject private var petLibrary: CustomPetLibrary
     @State private var page: SettingsPage = .appearance
 
     init(model: MoodBallModel) {
         self.model = model
         _settings = ObservedObject(wrappedValue: SettingsStore.shared)
         _connections = ObservedObject(wrappedValue: model.harnessConnections)
+        _petLibrary = ObservedObject(wrappedValue: CustomPetLibrary.shared)
     }
 
     var body: some View {
@@ -37,9 +39,10 @@ struct SettingsPanelView: View {
     @ViewBuilder
     private var pageView: some View {
         switch page {
-        case .appearance: AppearanceSettingsPage(settings: settings)
+        case .appearance: AppearanceSettingsPage(settings: settings, library: petLibrary)
         case .interaction: InteractionSettingsPage(settings: settings)
         case .shortcuts: ShortcutsSettingsPage(settings: settings)
+        case .petManagement: PetManagementPage(settings: settings, library: petLibrary)
         case .connection: HarnessConnectionSettingsPage(model: model, connections: connections, commandClient: model.commandClient, settings: settings)
         case .about: AboutSettingsPage()
         }
@@ -50,6 +53,7 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
     case appearance = "桌宠外观"
     case interaction = "交互与提醒"
     case shortcuts = "快捷键"
+    case petManagement = "宠物管理"
     case connection = "Harness 连接"
     case about = "关于与更新"
     var id: String { rawValue }
@@ -59,6 +63,7 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
         case .appearance: return "paintbrush"
         case .interaction: return "hand.tap"
         case .shortcuts: return "command"
+        case .petManagement: return "pawprint"
         case .connection: return "point.3.connected.trianglepath.dotted"
         case .about: return "info.circle"
         }
@@ -241,8 +246,16 @@ private struct ToggleSettingRow: View {
 
 private struct PetSelectionButton: View {
     let skin: FloatingPetSkin
+    let title: String
     let selected: Bool
     let action: () -> Void
+
+    init(skin: FloatingPetSkin, title: String? = nil, selected: Bool, action: @escaping () -> Void) {
+        self.skin = skin
+        self.title = title ?? skin.label
+        self.selected = selected
+        self.action = action
+    }
 
     var body: some View {
         Button(action: action) {
@@ -250,7 +263,7 @@ private struct PetSelectionButton: View {
                 Image(systemName: selected ? "circle.inset.filled" : "circle")
                     .font(.system(size: 19))
                     .foregroundStyle(selected ? Color.accentColor : Color.secondary.opacity(0.55))
-                Text(skin.label)
+                Text(title)
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)
             }
@@ -271,6 +284,7 @@ private struct PetSelectionButton: View {
 
 private struct AppearanceSettingsPage: View {
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var library: CustomPetLibrary
     @State private var previewMood = "idle"
     @State private var showingColors = false
     @State private var showingMoodBallDetails = false
@@ -314,6 +328,11 @@ private struct AppearanceSettingsPage: View {
                 ForEach(FloatingPetSkin.allCases) { skin in
                     PetSelectionButton(skin: skin, selected: settings.skin == skin) {
                         settings.skin = skin
+                    }
+                }
+                ForEach(library.pets) { pet in
+                    PetSelectionButton(skin: pet.skin, title: pet.displayName, selected: settings.skin == pet.skin) {
+                        settings.skin = pet.skin
                     }
                 }
             }
@@ -412,7 +431,7 @@ private struct AppearanceSettingsPage: View {
                     .buttonStyle(.link).font(.caption)
             }
             VStack(spacing: 12) {
-                PetPreview(settings: settings, mood: previewMood)
+                PetPreview(settings: settings, library: library, mood: previewMood)
                     .frame(height: 218).frame(maxWidth: .infinity)
                 Picker("预览状态", selection: $previewMood) {
                     ForEach(moodColorConfigs, id: \.mood) { config in Text(config.label).tag(config.mood) }
@@ -434,9 +453,20 @@ private struct AppearanceSettingsPage: View {
 
 struct PetPreview: View {
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var library: CustomPetLibrary
     let mood: String
     @State private var phase = false
     private var previewColor: Color { settings.moodColors[mood] ?? settings.disconnectedColor }
+
+    init(settings: SettingsStore, mood: String) {
+        self.init(settings: settings, library: .shared, mood: mood)
+    }
+
+    init(settings: SettingsStore, library: CustomPetLibrary, mood: String) {
+        _settings = ObservedObject(wrappedValue: settings)
+        _library = ObservedObject(wrappedValue: library)
+        self.mood = mood
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -447,6 +477,12 @@ struct PetPreview: View {
                 max(1, geometry.size.height - bubbleHeight) / (heightFactor * 1.02),
                 max(1, geometry.size.width - 20) / (widthFactor * 1.02)
             ))
+            let customAvailable: Bool = {
+                if case .custom = settings.skin {
+                    return library.atlas(for: settings.skin) != nil
+                }
+                return true
+            }()
 
             VStack(spacing: 4) {
                 if settings.showStatusBubble {
@@ -458,7 +494,7 @@ struct PetPreview: View {
                     }
                 }
                 Group {
-                    if settings.skin.isSprite {
+                    if settings.skin.isSprite && customAvailable {
                         XiaoyuSpriteView(skin: settings.skin, mood: mood, color: previewColor, size: previewSize, glowEnabled: settings.glowEnabled, interactionTriggeredAt: nil, dragDirection: nil)
                     } else {
                         MoodBallPreview(settings: settings, color: previewColor, diameter: previewSize)
