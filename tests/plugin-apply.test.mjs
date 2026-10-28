@@ -66,19 +66,20 @@ async function command(socket, nextLine, id, action, fields = {}) {
 }
 
 test('plugin adapter calls official-style workspace and session services', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'moodball-plugin-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-plugin-'))
   const instanceDirectory = join(root, 'instances')
   const statusPath = join(root, 'status.sock')
   const commandPath = join(root, 'command.sock')
-  const previousStatusPath = process.env.MOODBALL_SOCKET_PATH
-  const previousCommandPath = process.env.MOODBALL_COMMAND_SOCKET_PATH
-  const previousInstanceDirectory = process.env.MOODBALL_INSTANCE_DIRECTORY
-  process.env.MOODBALL_SOCKET_PATH = statusPath
-  process.env.MOODBALL_COMMAND_SOCKET_PATH = commandPath
-  process.env.MOODBALL_INSTANCE_DIRECTORY = instanceDirectory
+  const previousStatusPath = process.env.DSH_PET_SOCKET_PATH
+  const previousCommandPath = process.env.DSH_PET_COMMAND_SOCKET_PATH
+  const previousInstanceDirectory = process.env.DSH_PET_INSTANCE_DIRECTORY
+  process.env.DSH_PET_SOCKET_PATH = statusPath
+  process.env.DSH_PET_COMMAND_SOCKET_PATH = commandPath
+  process.env.DSH_PET_INSTANCE_DIRECTORY = instanceDirectory
 
   let eventHandler
   let statusRoute
+  const routes = []
   const cleanups = []
   const calls = []
   let sessionRunning = false
@@ -137,7 +138,11 @@ test('plugin adapter calls official-style workspace and session services', async
       if (typeof cleanup === 'function') cleanups.push(cleanup)
     },
     webServer: {
-      register: route => { statusRoute = route },
+      register: route => {
+        routes.push(route)
+        if (route.path === '/api/dsh-pet/status') statusRoute = route
+        return () => {}
+      },
     },
   }
 
@@ -156,25 +161,25 @@ test('plugin adapter calls official-style workspace and session services', async
 
     const created = await command(socket, nextLine, 'create', 'createSession', {
       workspaceId: workspace.id,
-      sessionId: 'moodball-session-test',
+      sessionId: 'dsh-pet-session-test',
     })
-    assert.equal(created.sessionId, 'moodball-session-test')
+    assert.equal(created.sessionId, 'dsh-pet-session-test')
 
     const subscribed = await command(socket, nextLine, 'subscribe', 'subscribe', {
-      sessionId: 'moodball-session-test',
+      sessionId: 'dsh-pet-session-test',
     })
     assert.equal(subscribed.snapshot.workspaceId, workspace.id)
     assert.equal(subscribed.snapshot.mood, 'idle')
 
     const taskSubscription = await command(socket, nextLine, 'tasks', 'subscribeTasks')
-    assert.deepEqual(taskSubscription.tasks.map(task => task.sessionId), ['moodball-session-test'])
-    assert.equal(taskSubscription.tasks[0].sessionId, 'moodball-session-test')
+    assert.deepEqual(taskSubscription.tasks.map(task => task.sessionId), ['dsh-pet-session-test'])
+    assert.equal(taskSubscription.tasks[0].sessionId, 'dsh-pet-session-test')
     assert.equal(taskSubscription.tasks[0].workspaceId, workspace.id)
     assert.equal(taskSubscription.tasks[0].state, 'idle')
 
     const prompted = await command(socket, nextLine, 'prompt', 'prompt', {
       workspaceId: workspace.id,
-      sessionId: 'moodball-session-test',
+      sessionId: 'dsh-pet-session-test',
       requestId: 'request-test',
       text: 'hello',
     })
@@ -184,7 +189,7 @@ test('plugin adapter calls official-style workspace and session services', async
 
     const imagePrompted = await command(socket, nextLine, 'prompt-image', 'prompt', {
       workspaceId: workspace.id,
-      sessionId: 'moodball-session-test',
+      sessionId: 'dsh-pet-session-test',
       requestId: 'request-image',
       text: '',
       images: [{ mediaType: 'image/png', data: 'aGVsbG8=', name: 'capture.png' }],
@@ -195,7 +200,7 @@ test('plugin adapter calls official-style workspace and session services', async
     }])
 
     sessionRunning = true
-    eventHandler({ id: 'moodball-session-test' }, { type: 'turn/start' })
+    eventHandler({ id: 'dsh-pet-session-test' }, { type: 'turn/start' })
     const event = await nextLine()
     assert.equal(event.event, 'status')
     assert.equal(event.snapshot.mood, 'waiting')
@@ -206,22 +211,23 @@ test('plugin adapter calls official-style workspace and session services', async
     assert.equal(taskEvent.tasks[0].mood, 'waiting')
 
     let routeBody
+    assert.deepEqual(routes.map(route => route.path), ['/api/dsh-pet/status', '/api/moodball/status'])
     statusRoute.handler(
       { method: 'GET' },
       { writeHead: status => assert.equal(status, 200), end: body => { routeBody = JSON.parse(body) } },
     )
     assert.equal(routeBody.ok, true)
-    assert.equal(routeBody.sessionId, 'moodball-session-test')
+    assert.equal(routeBody.sessionId, 'dsh-pet-session-test')
     assert.equal(routeBody.instanceId, instance.instanceId)
     socket.destroy()
   } finally {
     for (const cleanup of cleanups.reverse()) cleanup()
-    if (previousStatusPath === undefined) delete process.env.MOODBALL_SOCKET_PATH
-    else process.env.MOODBALL_SOCKET_PATH = previousStatusPath
-    if (previousCommandPath === undefined) delete process.env.MOODBALL_COMMAND_SOCKET_PATH
-    else process.env.MOODBALL_COMMAND_SOCKET_PATH = previousCommandPath
-    if (previousInstanceDirectory === undefined) delete process.env.MOODBALL_INSTANCE_DIRECTORY
-    else process.env.MOODBALL_INSTANCE_DIRECTORY = previousInstanceDirectory
+    if (previousStatusPath === undefined) delete process.env.DSH_PET_SOCKET_PATH
+    else process.env.DSH_PET_SOCKET_PATH = previousStatusPath
+    if (previousCommandPath === undefined) delete process.env.DSH_PET_COMMAND_SOCKET_PATH
+    else process.env.DSH_PET_COMMAND_SOCKET_PATH = previousCommandPath
+    if (previousInstanceDirectory === undefined) delete process.env.DSH_PET_INSTANCE_DIRECTORY
+    else process.env.DSH_PET_INSTANCE_DIRECTORY = previousInstanceDirectory
     await rm(root, { recursive: true, force: true })
   }
 })

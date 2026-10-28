@@ -3,14 +3,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-EXEC_NAME="MoodBall"
+EXEC_NAME="DSHPet"
 APP_NAME="DSH Pet"
 BUNDLE_EXEC_NAME="DSHPet"
-BUNDLE_ID="com.sundusk.moodball"
+BUNDLE_ID="com.sundusk.dsh-pet"
 BUILD_DIR=".build/release"
 APP_DIR="dist/${APP_NAME}.app"
-ICON_SOURCE="Resources/moodball-icon-1024.png"
-ICONSET_DIR=".build/MoodBall.iconset"
+ICON_SOURCE="Resources/dsh-pet-icon-1024.png"
+ICONSET_DIR=".build/DSHPet.iconset"
 
 echo "==> swift build -c release --disable-sandbox"
 # --disable-sandbox：项目位于受限工作区（如 DSH 会话目录）时，
@@ -23,7 +23,7 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BUILD_DIR/$EXEC_NAME" "$APP_DIR/Contents/MacOS/$BUNDLE_EXEC_NAME"
 
 echo "==> 复制宠物图集"
-for pet_resource in Resources/Pet/Xiaoyu/XiaoyuSprites.png Resources/Pet/Xiaoyu/XiaoyuDragSprites.png Resources/Pet/Xinzhizhu/XinzhizhuSprites.webp Resources/Pet/Jingyuniang/JingyuniangSprites.png; do
+for pet_resource in Resources/Pet/Xiaoyu/XiaoyuSprites.png Resources/Pet/Xiaoyu/XiaoyuDragSprites.png Resources/Pet/Xinzhizhu/XinzhizhuSprites.webp Resources/Pet/Jingyuniang/JingyuniangSprites.png Resources/Pet/JingyuniangQ/JingyuniangQSprites.webp; do
 	if [ ! -f "$pet_resource" ]; then
 		echo "未找到宠物资源：$pet_resource" >&2
 		exit 1
@@ -64,7 +64,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleDisplayName</key>
 	<string>DSH Pet</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.sundusk.moodball</string>
+	<string>com.sundusk.dsh-pet</string>
 	<key>CFBundleExecutable</key>
 	<string>DSHPet</string>
 	<key>CFBundlePackageType</key>
@@ -72,9 +72,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleIconFile</key>
 	<string>DSHPet</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.8.0</string>
+	<string>0.8.1</string>
 	<key>CFBundleVersion</key>
-	<string>14</string>
+	<string>15</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
@@ -88,7 +88,7 @@ PLIST
 # 本地 ad-hoc 签名（未签名二进制在 arm64 上也能跑，签名更稳）
 codesign --force --sign - "$APP_DIR" 2>/dev/null || true
 
-if [ "${MOODBALL_SKIP_OPEN:-0}" != "1" ]; then
+if [ "${DSH_PET_SKIP_OPEN:-${MOODBALL_SKIP_OPEN:-0}}" != "1" ]; then
 	echo "==> 打开 $APP_DIR"
 	open "$APP_DIR"
 fi

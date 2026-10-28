@@ -7,10 +7,37 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 const installScript = await readFile(new URL('../install.sh', import.meta.url), 'utf8')
+const pluginStart = installScript.indexOf('plugin_is_installed() {')
+const pluginEnd = installScript.indexOf('\n}\n', pluginStart) + 2
+assert.ok(pluginStart >= 0 && pluginEnd > pluginStart, 'installer plugin helper must remain extractable')
+const pluginSource = installScript.slice(pluginStart, pluginEnd)
 const helperStart = installScript.indexOf('instance_manifest_record() {')
 const helperEnd = installScript.indexOf('\nstatus_is_active() {', helperStart)
 assert.ok(helperStart >= 0 && helperEnd > helperStart, 'installer socket helper block must remain extractable')
 const helperSource = installScript.slice(helperStart, helperEnd)
+
+function runPluginProbe(inventory, queryFails = false) {
+  const result = spawnSync('bash', ['-c', `${pluginSource}\nharness_cli() {\n  if [ "${'${PLUGIN_QUERY_FAIL}'}" = 1 ]; then return 1; fi\n  printf '%s' "${'${PLUGIN_INVENTORY}'}"\n}\nplugin_is_installed`], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PLUGIN_NAME: '@sundusk/dsh-pet',
+      LEGACY_PLUGIN_NAME: '@sundusk/dsh-moodball-status',
+      PLUGIN_PROFILE: 'web',
+      PLUGIN_INVENTORY: inventory,
+      PLUGIN_QUERY_FAIL: queryFails ? '1' : '0',
+    },
+  })
+  assert.equal(result.error, undefined, result.error?.message)
+  return result.status
+}
+
+test('installer distinguishes current, legacy, absent, and unavailable plugin states', () => {
+  assert.equal(runPluginProbe('installed: @sundusk/dsh-pet'), 0)
+  assert.equal(runPluginProbe('installed: @sundusk/dsh-moodball-status'), 3)
+  assert.equal(runPluginProbe('installed: another-plugin'), 1)
+  assert.equal(runPluginProbe('', true), 2)
+})
 
 function runSocketProbe({ home, socketPath, pid, type, running = '1', path }) {
   const result = spawnSync('bash', ['-c', `${helperSource}\nsocket_is_active`], {
@@ -22,7 +49,7 @@ function runSocketProbe({ home, socketPath, pid, type, running = '1', path }) {
       HARNESS_PID: pid,
       HARNESS_TYPE: type,
       HARNESS_RUNNING: running,
-      MOODBALL_INSTANCE_DIRECTORY: join(home, 'Library', 'Application Support', 'MoodBall', 'instances'),
+      DSH_PET_INSTANCE_DIRECTORY: join(home, 'Library', 'Application Support', 'DSH Pet', 'instances'),
       ...(path === undefined ? {} : { PATH: path }),
     },
   })
@@ -43,7 +70,7 @@ test('installer discovers a matching instance manifest and both active sockets',
   const root = await mkdtemp(join(tmpdir(), 'dsh-pet-installer-'))
   const home = join(root, 'home')
   const socketRoot = join(root, 'sockets')
-  const instances = join(home, 'Library', 'Application Support', 'MoodBall', 'instances')
+  const instances = join(home, 'Library', 'Application Support', 'DSH Pet', 'instances')
   await mkdir(instances, { recursive: true })
   await mkdir(socketRoot)
   const statusSocketPath = join(socketRoot, 'status.sock')
@@ -86,7 +113,7 @@ test('installer does not claim an active manifest belonging to another PID', asy
   const root = await mkdtemp(join(tmpdir(), 'dsh-pet-installer-'))
   const home = join(root, 'home')
   const socketRoot = join(root, 'sockets')
-  const instances = join(home, 'Library', 'Application Support', 'MoodBall', 'instances')
+  const instances = join(home, 'Library', 'Application Support', 'DSH Pet', 'instances')
   await mkdir(instances, { recursive: true })
   await mkdir(socketRoot)
   const statusSocketPath = join(socketRoot, 'status.sock')

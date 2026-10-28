@@ -5,7 +5,7 @@
 # 功能：
 #   1. 退出正在运行的 DSH Pet / 旧版 MoodBall
 #   2. 删除 Applications 中的新旧应用包
-#   3. 询问是否同时移除 dsh-moodball-status 插件（dsh plugin remove）
+#   3. 询问是否同时移除 DSH Pet 桥接插件（dsh plugin remove）
 #
 # 用法：
 #   bash uninstall.sh
@@ -49,21 +49,22 @@ fi
 
 # ---------------------------------------------------------------- 3. 移除插件（询问）
 echo ""
-read -r -p "是否同时移除 dsh-moodball-status 插件？(y/N) " ans
+read -r -p "是否同时移除 DSH Pet 桥接插件？(y/N) " ans
 case "$ans" in
     y|Y|yes|YES)
         DSH_BIN=$(command -v dsh || ls -d "$HOME"/.npm/_npx/*/node_modules/.bin/dsh 2>/dev/null | head -1)
         if [ -n "$DSH_BIN" ]; then
-            "$DSH_BIN" plugin --profile web remove github:sundusk/dsh-pet 2>&1 || {
-                info "插件移除失败，请手动执行：dsh plugin --profile web remove github:sundusk/dsh-pet"
-            }
-            ok "插件已移除（重启 dsh web 后生效）。"
+            if "$DSH_BIN" plugin --profile web remove @sundusk/dsh-pet 2>&1; then
+                ok "插件已移除（重启 dsh web 后生效）。"
+            else
+                info "插件移除失败；如果安装的是旧版，请手动执行：dsh plugin --profile web remove @sundusk/dsh-moodball-status"
+            fi
         else
-            info "未找到 dsh 命令，请手动执行：dsh plugin --profile web remove github:sundusk/dsh-pet"
+            info "未找到 dsh 命令，请手动执行：dsh plugin --profile web remove @sundusk/dsh-pet"
         fi
         ;;
     *)
-        info "已跳过插件移除（保留 dsh-moodball-status，不影响其他功能）。"
+        info "已跳过插件移除（保留 DSH Pet 桥接插件，不影响其他功能）。"
         ;;
 esac
 

@@ -1,5 +1,5 @@
 export type HarnessInstanceKind = 'desktop' | 'web' | 'unknown';
-/** The on-disk discovery contract consumed by MoodBall.app. */
+/** The on-disk discovery contract consumed by DSH Pet.app. */
 export interface HarnessInstanceDescriptor {
     protocolVersion: 1;
     instanceId: string;

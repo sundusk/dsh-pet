@@ -1,10 +1,10 @@
 /**
- * dsh-moodball-status host plugin — a pure Harness status bridge (no browser
+ * dsh-pet host plugin — a pure Harness status bridge (no browser
  * UI, no settings namespace) that tracks agent activity and serves a stable
- * snapshot over HTTP and a local Unix socket for the MoodBall macOS desktop app.
+ * snapshot over HTTP and a local Unix socket for the DSH Pet macOS desktop app.
  * Install
  * via `dsh plugin --profile web add github:sundusk/dsh-pet`.
- * @module @sundusk/dsh-moodball-status
+ * @module @sundusk/dsh-pet
  */
 
 import { Context } from '@deepseek-ai/cordis'
@@ -18,8 +18,8 @@ import { basename } from 'node:path'
 import {
   CommandBridge,
   type ImageAttachmentLimits,
-  type MoodballTask,
-  type MoodballWorkspace,
+  type DshPetTask,
+  type DshPetWorkspace,
 } from './CommandBridge.js'
 import { LocalStateBridge, type MoodBridgePayload } from './LocalStateBridge.js'
 import {
@@ -42,13 +42,13 @@ export {
 export type { HarnessInstanceDescriptor, HarnessInstanceKind } from './HarnessInstance.js'
 
 /** Stable cordis plugin name (matches cordis.patch.yml insert id). */
-export const name = 'moodball'
+export const name = 'dsh-pet'
 
 /** Services required before the status surface can mount. */
 export const inject = ['webServer', 'workspaceRegistry', 'sessionController', 'attachments']
 
 /** The mood the desktop app renders (same vocabulary as the web water ball). */
-export type MoodballMood =
+export type DshPetMood =
   | 'idle'
   | 'waiting'
   | 'jumping'
@@ -59,9 +59,9 @@ export type MoodballMood =
   | 'authorizing'
   | 'questioning'
 
-type MoodballResult = Extract<MoodballMood, 'done' | 'failed' | 'stopped'>
+type DshPetResult = Extract<DshPetMood, 'done' | 'failed' | 'stopped'>
 
-function stateForMood(mood: MoodballMood): MoodballTask['state'] {
+function stateForMood(mood: DshPetMood): DshPetTask['state'] {
   switch (mood) {
     case 'waiting': return 'thinking'
     case 'jumping': return 'toolCalling'
@@ -75,7 +75,7 @@ function stateForMood(mood: MoodballMood): MoodballTask['state'] {
   }
 }
 
-function isRunningMood(mood: MoodballMood): boolean {
+function isRunningMood(mood: DshPetMood): boolean {
   return ['waiting', 'jumping', 'authorizing', 'questioning'].includes(mood)
 }
 
@@ -86,8 +86,8 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 }
 
 /**
- * Register the MoodBall status surface: fold the agent session stream into a
- * stable snapshot, serve it over GET /api/moodball/status, and broadcast the
+ * Register the DSH Pet status surface: fold the agent session stream into a
+ * stable snapshot, serve it over GET /api/dsh-pet/status, and broadcast the
  * same snapshot through LocalStateBridge. The route is always live while the
  * plugin is loaded — there is no settings namespace to toggle.
  * @param ctx - host root context.
@@ -96,11 +96,11 @@ export function apply(ctx: Context): void {
   interface SessionMoodState {
     sessionId?: string
     workspaceId?: string
-    mood: MoodballMood
+    mood: DshPetMood
     holdUntil: number
     questionActive: boolean
     /** Last terminal result stays on the task card until its next turn. */
-    lastResult?: MoodballResult
+    lastResult?: DshPetResult
     tool?: string
     message?: string
   }
@@ -112,15 +112,17 @@ export function apply(ctx: Context): void {
   }
   const sessionStates = new Map<string, SessionMoodState>()
   const sessionOperations = new Map<string, Promise<void>>()
-  let taskSnapshot: MoodballTask[] = []
+  let taskSnapshot: DshPetTask[] = []
   let taskRefreshTimer: ReturnType<typeof setTimeout> | undefined
-  let refreshTaskSnapshot: (() => Promise<readonly MoodballTask[]>) | undefined
+  let refreshTaskSnapshot: (() => Promise<readonly DshPetTask[]>) | undefined
   let activeSessionId: string | undefined
   let commandBridge: CommandBridge | undefined
   const instance: HarnessInstanceDescriptor = createHarnessInstanceDescriptor(ctx)
   const instanceManifest = new HarnessInstanceManifest(
     instance,
-    process.env.MOODBALL_INSTANCE_DIRECTORY ?? instanceDiscoveryDirectory(),
+    process.env.DSH_PET_INSTANCE_DIRECTORY
+      ?? process.env.MOODBALL_INSTANCE_DIRECTORY
+      ?? instanceDiscoveryDirectory(),
   )
   let statusReady = false
   let commandReady = false
@@ -141,7 +143,7 @@ export function apply(ctx: Context): void {
       instanceManifest.publish()
       instanceManifestPublished = true
     } catch (error) {
-      console.warn(`[moodball] instance discovery unavailable: ${String(error)}`)
+      console.warn(`[dsh-pet] instance discovery unavailable: ${String(error)}`)
     }
   }
 
@@ -225,7 +227,7 @@ export function apply(ctx: Context): void {
     parentSessionId?: string
     origin?: 'subagent'
     cwd?: string
-  }[]): MoodballTask[] => summaries.flatMap(summary => {
+  }[]): DshPetTask[] => summaries.flatMap(summary => {
     // The task center is for ordinary user sessions only. Child Agent rows
     // remain visible inside Harness and must not compete with their parent.
     if (summary.parentSessionId !== undefined || summary.origin === 'subagent') return []
@@ -246,7 +248,7 @@ export function apply(ctx: Context): void {
       updatedAt: summary.updatedAt,
       running: summary.running,
       blank: summary.blank,
-      state: projected.state as MoodballTask['state'],
+      state: projected.state as DshPetTask['state'],
       mood: projected.mood,
       taskRunning: summary.running || projected.taskRunning,
       waitingForUser: projected.waitingForUser,
@@ -262,7 +264,7 @@ export function apply(ctx: Context): void {
     taskRefreshTimer = setTimeout(() => {
       taskRefreshTimer = undefined
       void refreshTaskSnapshot?.().catch(error => {
-        console.warn(`[moodball] task list refresh failed: ${String(error)}`)
+        console.warn(`[dsh-pet] task list refresh failed: ${String(error)}`)
       })
     }, 150)
   }
@@ -276,7 +278,7 @@ export function apply(ctx: Context): void {
   // A transient mood (done / failed / stopped) holds for `ms` before reverting
   // to idle, so the colored reaction is visible instead of being swallowed by
   // the immediately following `activity/status` idle phase.
-  const setTransient = (state: SessionMoodState, next: MoodballMood, ms: number): void => {
+  const setTransient = (state: SessionMoodState, next: DshPetMood, ms: number): void => {
     state.mood = next
     if (next === 'done' || next === 'failed' || next === 'stopped') state.lastResult = next
     state.holdUntil = Date.now() + ms
@@ -404,7 +406,7 @@ export function apply(ctx: Context): void {
     imageAttachmentLimits: (ctx as unknown as {
       attachments: { imageLimits: ImageAttachmentLimits }
     }).attachments.imageLimits,
-    listWorkspaces: async (): Promise<readonly MoodballWorkspace[]> => Promise.all(
+    listWorkspaces: async (): Promise<readonly DshPetWorkspace[]> => Promise.all(
       ctx.workspaceRegistry.list().map(async workspace => ({
         id: String(workspace.id),
         title: workspace.title,
@@ -413,7 +415,7 @@ export function apply(ctx: Context): void {
         sessionIds: workspace.sessionIds.map(String),
       })),
     ),
-    listTasks: async (): Promise<readonly MoodballTask[]> => {
+    listTasks: async (): Promise<readonly DshPetTask[]> => {
       if (refreshTaskSnapshot !== undefined) return refreshTaskSnapshot()
       return taskSnapshot
     },
@@ -448,7 +450,7 @@ export function apply(ctx: Context): void {
     snapshotFor: snapshotForSession,
   }, instance.commandSocketPath, instance)
 
-  refreshTaskSnapshot = async (): Promise<readonly MoodballTask[]> => {
+  refreshTaskSnapshot = async (): Promise<readonly DshPetTask[]> => {
     const listed = await ctx.sessionController.list({}, AbortSignal.timeout(15_000))
     taskSnapshot = tasksFromSummaries(listed.items)
     commandBridge?.publishTasks(taskSnapshot)
@@ -467,7 +469,7 @@ export function apply(ctx: Context): void {
       publishInstanceManifest()
     })
     void refreshTaskSnapshot?.().catch(error => {
-      console.warn(`[moodball] initial task list unavailable: ${String(error)}`)
+      console.warn(`[dsh-pet] initial task list unavailable: ${String(error)}`)
     })
     return () => {
       if (taskRefreshTimer !== undefined) clearTimeout(taskRefreshTimer)
@@ -481,11 +483,11 @@ export function apply(ctx: Context): void {
       statusReady = false
       commandReady = false
     }
-  }, 'moodball: local bridges')
+  }, 'dsh-pet: local bridges')
 
   const statusRoute: WebRoute = {
     kind: 'exact',
-    path: '/api/moodball/status',
+    path: '/api/dsh-pet/status',
     handler: (req: IncomingMessage, res: ServerResponse): void => {
       if (req.method !== 'GET') {
         json(res, 405, { ok: false, error: 'method-not-allowed' })
@@ -495,7 +497,18 @@ export function apply(ctx: Context): void {
     },
   }
 
+  // Keep the former endpoint during the package rename so an older desktop
+  // app can finish its upgrade without losing the status bridge.
+  const legacyStatusRoute: WebRoute = { ...statusRoute, path: '/api/moodball/status' }
+
   // Route is always live: unlike the web water ball there is no settings
   // namespace, so nothing can take it down while the plugin is loaded.
-  ctx.effect(() => ctx.webServer.register(statusRoute), 'moodball: status route')
+  ctx.effect(() => {
+    const dispose = ctx.webServer.register(statusRoute)
+    const disposeLegacy = ctx.webServer.register(legacyStatusRoute)
+    return () => {
+      disposeLegacy()
+      dispose()
+    }
+  }, 'dsh-pet: status routes')
 }

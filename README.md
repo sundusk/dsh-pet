@@ -28,10 +28,10 @@
 ### 项目组成
 
 - **DSH Pet.app**：以鲸鱼娘为默认形象的 macOS 桌宠应用，提供状态气泡、任务卡片与消息输入
-- **dsh-moodball-status**：状态与输入桥接插件（订阅 Agent 会话事件，提供 HTTP/状态 Socket 兼容接口，以及用户级命令 Socket；无 Harness Web UI、无设置项）
+- **DSH Pet 桥接插件**（包名 `@sundusk/dsh-pet`）：订阅 Agent 会话事件，提供 HTTP/状态 Socket 兼容接口和用户级命令 Socket；无 Harness Web UI、无设置项
 
-插件包名和应用数据目录暂沿用 `dsh-moodball` / `MoodBall`，以兼容已有配置。安装脚本会清理旧版 `MoodBall.app`。
-当前桌面 App 源码版本为 **v0.8.0**，桥接插件版本为 **v0.8.1**。已发布的 `DSH-Pet.app.zip` 安装包可从 [GitHub Releases](https://github.com/sundusk/dsh-pet/releases/latest) 下载；安装脚本也会自动获取最新发布的安装包。
+旧名称和数据位置保留必要的兼容处理。安装脚本会清理旧版 `MoodBall.app`。
+当前桌面 App 版本为 **v0.8.1**，桥接插件版本为 **v0.8.2**。`DSH-Pet.app.zip` 安装包可从 [GitHub Releases](https://github.com/sundusk/dsh-pet/releases/latest) 下载；安装脚本也会自动获取最新发布的安装包。
 
 一切配置都在 app 的设置面板里完成。新版设置面板包含六个页面：「桌宠外观」「交互与提醒」「快捷键」「宠物管理」「Harness 连接」和「关于与更新」。
 
@@ -104,9 +104,9 @@ DSH_SOURCE_ROOT="$HOME/Projects/deepseek-harness" bash install.sh
 ```
 
 安装器会复用当前环境或已识别 Harness 的 `DSH_HOME`，并将最近使用的 Harness 类型、源码路径和 profile
-记录在 `~/Library/Application Support/MoodBall/config.json`，供下一次安装使用。
+记录在 `~/Library/Application Support/DSH Pet/config.json`，供下一次安装使用；首次使用时也会读取旧位置的配置。
 
-如需自行构建，请先安装 Xcode 命令行工具，在本仓库运行 `MOODBALL_SKIP_OPEN=1 bash make-app.sh`，再运行 `bash install.sh`。
+如需自行构建，请先安装 Xcode 命令行工具，在本仓库运行 `DSH_PET_SKIP_OPEN=1 bash make-app.sh`，再运行 `bash install.sh`。
 
 桌面版使用独立的 `desktop` profile。已有桌面版的「插件」页面流程仍有效：请在桌面版「插件」页面安装并启用 `github:sundusk/dsh-pet`，再重启桌面版让插件加载。官方内置 CLI 需先完成初始化，并退出桌面版后才可管理该 `desktop` profile；NPM/NPX CLI 不能管理桌面版 profile。安装器检测到桌面版时不会把插件误装到 `web` profile。DSH Pet 使用本地 Socket 接收桌面版状态；桌面版晚启动或重启后会自动重连。
 
@@ -126,6 +126,8 @@ pnpm dsh plugin --profile web add github:sundusk/dsh-pet
 ```
 
 桌面版仍请使用其「插件」页面；官方内置 CLI 只有在完成初始化并退出桌面版后，才可管理 `desktop` profile；NPM/NPX CLI 只针对 `web` profile。加载新版 bridge 后，再回到 DSH Pet 的「Harness 连接」页重新检测。
+
+如果已安装旧包 `@sundusk/dsh-moodball-status`，请在对应 Harness 中移除旧包，再按上面的方式安装新版并重启 Harness。桌面版请在「插件」页面操作；源码版或 CLI 版可使用相应的 `dsh plugin --profile web remove @sundusk/dsh-moodball-status` 命令。
 
 ## ✨ 使用
 
@@ -193,6 +195,8 @@ pnpm dsh plugin --profile web add github:sundusk/dsh-pet
 
 首次安装默认显示鲸鱼娘；之后会记住你选择的宠物。
 
+内置「鲸鱼娘Q版」，可在「桌宠外观」直接选择。素材来自 Codex 同名宠物包，保留原始透明图集与帧序：空闲用待机，思考与工具调用用专注思考，授权与抉择用等待用户，完成用跳跃庆祝，失败用低落动作；双击挥手、左右拖拽奔跑也沿用原动作，共使用 51 帧。审阅与 16 向视线帧保留在图集中，暂未接入交互。
+
 鲸鱼娘的悬浮窗口按精灵和光晕收紧；状态气泡出现时才向上扩展，精灵之外的透明区域不会触发展开操作栏。
 
 ### 状态预览与导出
@@ -249,7 +253,7 @@ bash uninstall.sh
 ```
 
 脚本会退出并移除 `DSH Pet.app` 与旧版 `MoodBall.app`（检查 `~/Applications` 和 `/Applications`），
-并询问是否同时移除 `dsh-moodball-status` 插件（移除后重启 dsh web 生效）。
+并询问是否同时移除 DSH Pet 桥接插件（移除后重启 dsh web 生效）。
 
 ### 常见问题
 
@@ -261,7 +265,7 @@ bash uninstall.sh
 ## 🔧 开发
 
 ```bash
-# 插件（dsh-moodball-status）：构建到 lib/
+# DSH Pet 桥接插件：构建到 lib/
 pnpm install
 pnpm build
 

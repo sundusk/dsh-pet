@@ -13,7 +13,7 @@ import { join } from 'node:path'
 
 export type HarnessInstanceKind = 'desktop' | 'web' | 'unknown'
 
-/** The on-disk discovery contract consumed by MoodBall.app. */
+/** The on-disk discovery contract consumed by DSH Pet.app. */
 export interface HarnessInstanceDescriptor {
   protocolVersion: 1
   instanceId: string
@@ -62,6 +62,7 @@ export function createHarnessInstanceDescriptor(context?: unknown): HarnessInsta
   const profileContext = readHint(hints, 'profileContext')
   const resolvedProfile = readHint(hints, 'resolvedProfile')
   const profileValue = firstNonEmptyString(
+    process.env.DSH_PET_PROFILE,
     process.env.MOODBALL_PROFILE,
     process.env.DSH_PROFILE,
     profileContext?.name,
@@ -71,7 +72,9 @@ export function createHarnessInstanceDescriptor(context?: unknown): HarnessInsta
   )
   const profile = profileValue ?? profileName(resolvedProfile?.profile)
   const explicitKind = normalizeKind(firstNonEmptyString(
+    process.env.DSH_PET_HARNESS_KIND,
     process.env.MOODBALL_HARNESS_KIND,
+    process.env.DSH_PET_HARNESS_TYPE,
     process.env.MOODBALL_HARNESS_TYPE,
     readHint(hints, 'kind'),
     readHint(hints, 'type'),
@@ -91,7 +94,8 @@ export function createHarnessInstanceDescriptor(context?: unknown): HarnessInsta
   assertSocketPath(commandSocketPath)
 
   const webURL = safeLoopbackURL(
-    process.env.MOODBALL_WEB_URL
+    process.env.DSH_PET_WEB_URL
+      ?? process.env.MOODBALL_WEB_URL
       ?? process.env.DSH_WEB_URL
       ?? contextOrigin(hints)
       ?? contextWebURL(hints),
@@ -122,7 +126,7 @@ export function refreshHarnessInstanceWebURL(descriptor: HarnessInstanceDescript
 
 /** The default discovery directory shared by Desktop and Web Harness hosts. */
 export function instanceDiscoveryDirectory(home = homedir()): string {
-  return join(home, 'Library', 'Application Support', 'MoodBall', 'instances')
+  return join(home, 'Library', 'Application Support', 'DSH Pet', 'instances')
 }
 
 export function instanceManifestPath(instanceId: string, home = homedir()): string {
@@ -223,7 +227,11 @@ function profileName(value: unknown): string | undefined {
 }
 
 function targetIdentity(profile: string | undefined, context: HarnessContextHints | undefined): string | undefined {
-  const explicit = firstNonEmptyString(process.env.MOODBALL_TARGET_ID, readServiceString(context, 'targetId'))
+  const explicit = firstNonEmptyString(
+    process.env.DSH_PET_TARGET_ID,
+    process.env.MOODBALL_TARGET_ID,
+    readServiceString(context, 'targetId'),
+  )
   if (explicit !== undefined) return explicit
   const profileContext = readHint(context, 'profileContext')
   const profileObject = readHint(context, 'resolvedProfile')?.profile
@@ -256,6 +264,6 @@ function safeLoopbackURL(value: string | undefined): string | undefined {
 
 function assertSocketPath(path: string): void {
   if (Buffer.byteLength(path) > MAX_UNIX_SOCKET_PATH_BYTES) {
-    throw new Error(`MoodBall instance socket path exceeds Unix limit: ${path}`)
+    throw new Error(`DSH Pet instance socket path exceeds Unix limit: ${path}`)
   }
 }

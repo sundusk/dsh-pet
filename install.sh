@@ -7,18 +7,20 @@
 #   - NPM/NPX：执行 dsh 或 npx @deepseek-ai/dsh
 #   - Desktop：检测并提示在桌面版插件页面安装，不调用公开 CLI 修改保留的 desktop profile
 #
-# 运行架构不变：DeepSeek Harness → dsh-moodball-status → HTTP / Unix Socket → DSH Pet.app
+# 运行架构不变：DeepSeek Harness → DSH Pet 桥接插件 → HTTP / Unix Socket → DSH Pet.app
 # =============================================================================
 set -euo pipefail
 
 PLUGIN_SPEC="github:sundusk/dsh-pet"
-PLUGIN_NAME="@sundusk/dsh-moodball-status"
+PLUGIN_NAME="@sundusk/dsh-pet"
+LEGACY_PLUGIN_NAME="@sundusk/dsh-moodball-status"
 PLUGIN_PROFILE="web"
-STATUS_URL="${MOODBALL_STATUS_URL:-http://127.0.0.1:3080/api/moodball/status}"
-SOCKET_PATH="${MOODBALL_SOCKET_PATH:-$HOME/Library/Application Support/MoodBall/moodball.sock}"
+STATUS_URL="${DSH_PET_STATUS_URL:-${MOODBALL_STATUS_URL:-http://127.0.0.1:3080/api/dsh-pet/status}}"
+SOCKET_PATH="${DSH_PET_SOCKET_PATH:-${MOODBALL_SOCKET_PATH:-$HOME/Library/Application Support/DSH Pet/dsh-pet.sock}}"
 APP_SRC="dist/DSH Pet.app"
 RELEASE_URL="https://github.com/sundusk/dsh-pet/releases/latest/download/DSH-Pet.app.zip"
-CONFIG_PATH="$HOME/Library/Application Support/MoodBall/config.json"
+CONFIG_PATH="$HOME/Library/Application Support/DSH Pet/config.json"
+LEGACY_CONFIG_PATH="$HOME/Library/Application Support/MoodBall/config.json"
 
 APP_TMP=""
 APP_STAGE=""
@@ -186,7 +188,9 @@ scan_source_dir() {
 
 config_field() {
     local field="$1"
-    [ -f "$CONFIG_PATH" ] || return 1
+    local config_path="$CONFIG_PATH"
+    [ -f "$config_path" ] || config_path="$LEGACY_CONFIG_PATH"
+    [ -f "$config_path" ] || return 1
 
     if command -v node >/dev/null 2>&1; then
         node -e '
@@ -195,9 +199,9 @@ config_field() {
             const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))[process.argv[2]]
             if (typeof value === "string") process.stdout.write(value)
           } catch (_) {}
-        ' "$CONFIG_PATH" "$field" 2>/dev/null || true
+        ' "$config_path" "$field" 2>/dev/null || true
     else
-        sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$CONFIG_PATH" | head -1
+        sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$config_path" | head -1
     fi
 }
 
@@ -494,6 +498,9 @@ plugin_is_installed() {
     if [[ "$inventory" == *"$PLUGIN_NAME"* ]]; then
         return 0
     fi
+    if [[ "$inventory" == *"$LEGACY_PLUGIN_NAME"* ]]; then
+        return 3
+    fi
     return 1
 }
 
@@ -559,17 +566,18 @@ instance_manifest_is_active() {
     [ "$HARNESS_RUNNING" -eq 1 ] || return 1
     [ -n "$HARNESS_PID" ] || return 1
 
-    manifest_dir="${MOODBALL_INSTANCE_DIRECTORY:-$HOME/Library/Application Support/MoodBall/instances}"
-    [ -d "$manifest_dir" ] || return 1
-    for manifest in "$manifest_dir"/*.json; do
-        [ -f "$manifest" ] || continue
-        record=$(instance_manifest_record "$manifest" 2>/dev/null) || continue
-        IFS=$'\t' read -r manifest_pid manifest_kind status_socket command_socket <<< "$record"
-        [ "$manifest_pid" = "$HARNESS_PID" ] || continue
-        instance_kind_matches_harness "$manifest_kind" || continue
-        instance_socket_probe "$status_socket" || continue
-        instance_socket_probe "$command_socket" || continue
-        return 0
+    manifest_dir="${DSH_PET_INSTANCE_DIRECTORY:-${MOODBALL_INSTANCE_DIRECTORY:-$HOME/Library/Application Support/DSH Pet/instances}}"
+    for manifest_dir in "$manifest_dir" "$HOME/Library/Application Support/MoodBall/instances"; do
+        for manifest in "$manifest_dir"/*.json; do
+            [ -f "$manifest" ] || continue
+            record=$(instance_manifest_record "$manifest" 2>/dev/null) || continue
+            IFS=$'\t' read -r manifest_pid manifest_kind status_socket command_socket <<< "$record"
+            [ "$manifest_pid" = "$HARNESS_PID" ] || continue
+            instance_kind_matches_harness "$manifest_kind" || continue
+            instance_socket_probe "$status_socket" || continue
+            instance_socket_probe "$command_socket" || continue
+            return 0
+        done
     done
     return 1
 }
@@ -605,24 +613,24 @@ save_harness_config() {
     command -v node >/dev/null 2>&1 || return 0
 
     mkdir -p "$(dirname "$CONFIG_PATH")"
-    MOODBALL_CONFIG_PATH="$CONFIG_PATH" \
-    MOODBALL_HARNESS_TYPE="$HARNESS_TYPE" \
-    MOODBALL_SOURCE_ROOT="$HARNESS_SOURCE_ROOT" \
-    MOODBALL_DSH_HOME="$HARNESS_DSH_HOME" \
-    MOODBALL_PROFILE="$PLUGIN_PROFILE" \
-    MOODBALL_TRANSPORT="$PLUGIN_STATE" \
+    DSH_PET_CONFIG_PATH="$CONFIG_PATH" \
+    DSH_PET_HARNESS_TYPE="$HARNESS_TYPE" \
+    DSH_PET_SOURCE_ROOT="$HARNESS_SOURCE_ROOT" \
+    DSH_PET_DSH_HOME="$HARNESS_DSH_HOME" \
+    DSH_PET_PROFILE="$PLUGIN_PROFILE" \
+    DSH_PET_TRANSPORT="$PLUGIN_STATE" \
     node <<'NODE'
 const fs = require('fs')
-const path = process.env.MOODBALL_CONFIG_PATH
+const path = process.env.DSH_PET_CONFIG_PATH
 let previous = {}
 try { previous = JSON.parse(fs.readFileSync(path, 'utf8')) } catch (_) {}
 const next = {
   ...previous,
-  type: process.env.MOODBALL_HARNESS_TYPE,
-  sourceRoot: process.env.MOODBALL_SOURCE_ROOT || undefined,
-  dshHome: process.env.MOODBALL_DSH_HOME || undefined,
-  profile: process.env.MOODBALL_PROFILE,
-  lastSuccessfulTransport: process.env.MOODBALL_TRANSPORT,
+  type: process.env.DSH_PET_HARNESS_TYPE,
+  sourceRoot: process.env.DSH_PET_SOURCE_ROOT || undefined,
+  dshHome: process.env.DSH_PET_DSH_HOME || undefined,
+  profile: process.env.DSH_PET_PROFILE,
+  lastSuccessfulTransport: process.env.DSH_PET_TRANSPORT,
 }
 for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key]
 fs.writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 })
@@ -739,6 +747,10 @@ if [ "$HARNESS_TYPE" = "source" ] || [ "$HARNESS_TYPE" = "npm" ]; then
                 PLUGIN_STATE="notInstalled"
                 warn "状态插件尚未安装，将安装到：$HARNESS_DISPLAY"
                 ;;
+            3)
+                PLUGIN_STATE="legacy"
+                warn "检测到旧版桥接插件；请更新 github:sundusk/dsh-pet 并重启 Harness。"
+                ;;
             *)
                 PLUGIN_STATE="unknown"
                 warn "无法通过目标 Harness CLI 确认插件是否已安装。"
@@ -752,7 +764,9 @@ fi
 # Unix Socket 优先，HTTP 作为兼容回退。若 CLI 已明确说目标 profile 没有插件，
 # 但传输层却来自某个正在工作的 Harness，不把它静默归属到错误 profile。
 if socket_is_active; then
-    if [ "$PLUGIN_STATE" = "notInstalled" ]; then
+    if [ "$PLUGIN_STATE" = "legacy" ]; then
+        warn "旧版桥接仍在运行；更新插件并重启后才会加载新名称。"
+    elif [ "$PLUGIN_STATE" = "notInstalled" ]; then
         warn "检测到活动状态桥接，但目标 profile 未列出插件；不会改装其它 Harness。"
         PLUGIN_STATE="unknown"
     else
@@ -760,7 +774,9 @@ if socket_is_active; then
         ok "状态插件已连接（Unix Socket）"
     fi
 elif status_is_active; then
-    if [ "$PLUGIN_STATE" = "notInstalled" ]; then
+    if [ "$PLUGIN_STATE" = "legacy" ]; then
+        warn "旧版桥接仍在运行；更新插件并重启后才会加载新名称。"
+    elif [ "$PLUGIN_STATE" = "notInstalled" ]; then
         warn "检测到活动 HTTP 状态，但目标 profile 未列出插件；不会改装其它 Harness。"
         PLUGIN_STATE="unknown"
     else
@@ -771,7 +787,7 @@ fi
 
 # ---------------------------------------------------------------- 4. 通过 HarnessCLI 安装插件，不提前退出
 if [ "$PLUGIN_STATE" = "notInstalled" ]; then
-    info "安装 dsh-moodball-status……"
+    info "安装 DSH Pet 桥接插件……"
     if harness_cli plugin --profile "$PLUGIN_PROFILE" add "$PLUGIN_SPEC" 2>&1; then
         PLUGIN_STATE="installedInactive"
         ok "状态插件已安装。"
@@ -839,10 +855,12 @@ else
 fi
 
 # App 启动后再检查一次；刚安装的 Bundle 可能要等下次 Harness 启动。
-if socket_is_active; then
-    PLUGIN_STATE="active"
-elif status_is_active; then
-    PLUGIN_STATE="active"
+if [ "$PLUGIN_STATE" != "legacy" ]; then
+    if socket_is_active; then
+        PLUGIN_STATE="active"
+    elif status_is_active; then
+        PLUGIN_STATE="active"
+    fi
 fi
 
 save_harness_config || true
@@ -867,6 +885,10 @@ case "$PLUGIN_STATE" in
         ;;
     notInstalled)
         echo "  ⚠ 状态插件尚未安装。"
+        ;;
+    legacy)
+        echo "  ⚠ 检测到旧版插件，请移除 @sundusk/dsh-moodball-status，"
+        echo "    再安装 github:sundusk/dsh-pet 并重启 Harness。"
         ;;
     unknown)
         echo "  ⚠ 暂时无法确认状态插件是否已连接。"

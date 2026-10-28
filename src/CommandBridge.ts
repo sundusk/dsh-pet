@@ -9,8 +9,8 @@ import type { HarnessInstanceDescriptor } from './HarnessInstance.js'
 
 type PromptImageMediaType = Extract<PromptContentPart, { type: 'image' }>['mediaType']
 
-/** A detached workspace projection exposed to MoodBall.app. */
-export interface MoodballWorkspace {
+/** A detached workspace projection exposed to DSH Pet.app. */
+export interface DshPetWorkspace {
   id: string
   title: string
   path: string
@@ -48,7 +48,7 @@ export interface ImageAttachmentLimits {
 }
 
 /** A cold-safe ordinary Session projection for the task cards. */
-export interface MoodballTask {
+export interface DshPetTask {
   sessionId: string
   workspaceId: string
   title: string
@@ -68,8 +68,8 @@ export interface MoodballTask {
 
 export interface CommandHandlers {
   imageAttachmentLimits: ImageAttachmentLimits
-  listWorkspaces: () => Promise<readonly MoodballWorkspace[]>
-  listTasks: () => Promise<readonly MoodballTask[]>
+  listWorkspaces: () => Promise<readonly DshPetWorkspace[]>
+  listTasks: () => Promise<readonly DshPetTask[]>
   createSession: (request: CreateSessionCommand) => Promise<{ sessionId: string }>
   prompt: (request: PromptCommand) => Promise<{ accepted: true; sessionId: string }>
   snapshotFor: (sessionId: string) => MoodBridgePayload | undefined
@@ -110,13 +110,13 @@ class CommandError extends Error {
 /**
  * User-local command and session-status transport.
  *
- * This socket is intentionally separate from LocalStateBridge. Older MoodBall
+ * This socket is intentionally separate from LocalStateBridge. Older DSH Pet
  * clients continue to receive the global read-only snapshot, while new
  * clients can issue authenticated-by-file-permission commands and subscribe
  * to one selected session without mixing command responses into that stream.
  */
 export class CommandBridge {
-  static defaultPath = join(homedir(), 'Library', 'Application Support', 'MoodBall', 'moodball-command.sock')
+  static defaultPath = join(homedir(), 'Library', 'Application Support', 'DSH Pet', 'dsh-pet-command.sock')
 
   private readonly socketPath: string
   private readonly handlers: CommandHandlers
@@ -131,7 +131,9 @@ export class CommandBridge {
 
   constructor(
     handlers: CommandHandlers,
-    socketPath = process.env.MOODBALL_COMMAND_SOCKET_PATH ?? CommandBridge.defaultPath,
+    socketPath = process.env.DSH_PET_COMMAND_SOCKET_PATH
+      ?? process.env.MOODBALL_COMMAND_SOCKET_PATH
+      ?? CommandBridge.defaultPath,
     instance?: HarnessInstanceDescriptor,
   ) {
     this.handlers = handlers
@@ -147,7 +149,7 @@ export class CommandBridge {
     if (existsSync(this.socketPath)) {
       const stat = lstatSync(this.socketPath)
       if (!stat.isSocket()) {
-        console.warn(`[moodball] command bridge path is not a socket: ${this.socketPath}`)
+        console.warn(`[dsh-pet] command bridge path is not a socket: ${this.socketPath}`)
         return
       }
       const staleIdentity = socketIdentity(this.socketPath)
@@ -159,7 +161,7 @@ export class CommandBridge {
       probe.once('connect', () => {
         probe.destroy()
         this.probing = false
-        console.warn(`[moodball] command bridge path is already active: ${this.socketPath}`)
+        console.warn(`[dsh-pet] command bridge path is already active: ${this.socketPath}`)
       })
       probe.once('error', error => {
         probe.destroy()
@@ -167,7 +169,7 @@ export class CommandBridge {
         if (generation !== this.probeGeneration) return
         const code = 'code' in error ? (error as Error & { code?: string }).code : undefined
         if (code !== 'ECONNREFUSED' && code !== 'ENOENT') {
-          console.warn(`[moodball] command bridge unavailable: ${error.message}`)
+          console.warn(`[dsh-pet] command bridge unavailable: ${error.message}`)
           return
         }
         if (!sameSocketIdentity(staleIdentity, socketIdentity(this.socketPath))) return
@@ -211,7 +213,7 @@ export class CommandBridge {
       socket.on('error', () => this.clients.delete(client))
     })
     server.on('error', error => {
-      console.warn(`[moodball] command bridge unavailable: ${error.message}`)
+      console.warn(`[dsh-pet] command bridge unavailable: ${error.message}`)
     })
     server.listen(this.socketPath, () => {
       const identity = socketIdentity(this.socketPath)
@@ -241,7 +243,7 @@ export class CommandBridge {
   }
 
   /** Push a replacement task projection to clients that requested task updates. */
-  publishTasks(tasks: readonly MoodballTask[]): void {
+  publishTasks(tasks: readonly DshPetTask[]): void {
     for (const client of this.clients) {
       if (!client.taskSubscription) continue
       this.write(client.socket, { event: 'tasks', tasks })
@@ -391,7 +393,7 @@ export class CommandBridge {
         this.respond(client.socket, id, { sessionId })
         return
       }
-      throw new CommandError('unknown-action', 'unsupported MoodBall command')
+      throw new CommandError('unknown-action', 'unsupported DSH Pet command')
     } catch (error) {
       this.write(client.socket, {
         id,
@@ -440,7 +442,7 @@ function preserveReplacement(path: string, owner: SocketIdentity | undefined): s
   if (owner === undefined) return undefined
   const current = socketIdentity(path)
   if (sameSocketIdentity(owner, current) || current === undefined) return undefined
-  const backup = `${path}.moodball-preserve-${randomUUID()}`
+  const backup = `${path}.dsh-pet-preserve-${randomUUID()}`
   try {
     renameSync(path, backup)
     return backup

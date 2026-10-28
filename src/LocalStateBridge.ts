@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, renameSync, unlinkSync, ty
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-/** The newline-delimited local bridge payload shared with MoodBall.app. */
+/** The newline-delimited local bridge payload shared with DSH Pet.app. */
 export interface MoodBridgePayload {
   instanceId?: string
   state: string
@@ -23,12 +23,12 @@ export interface MoodBridgePayload {
 /**
  * Small, opt-in local transport for the host plugin.
  *
- * The socket is deliberately a server owned by the plugin: MoodBall only
+ * The socket is deliberately a server owned by the plugin: DSH Pet only
  * observes it and never starts or stops Harness. Each client receives the
  * latest snapshot immediately, then one JSON object per line on change.
  */
 export class LocalStateBridge {
-  static defaultPath = join(homedir(), 'Library', 'Application Support', 'MoodBall', 'moodball.sock')
+  static defaultPath = join(homedir(), 'Library', 'Application Support', 'DSH Pet', 'dsh-pet.sock')
 
   private readonly socketPath: string
   private readonly readSnapshot: () => MoodBridgePayload
@@ -41,7 +41,9 @@ export class LocalStateBridge {
 
   constructor(
     readSnapshot: () => MoodBridgePayload,
-    socketPath = process.env.MOODBALL_SOCKET_PATH ?? LocalStateBridge.defaultPath,
+    socketPath = process.env.DSH_PET_SOCKET_PATH
+      ?? process.env.MOODBALL_SOCKET_PATH
+      ?? LocalStateBridge.defaultPath,
   ) {
     this.readSnapshot = readSnapshot
     this.socketPath = socketPath
@@ -54,7 +56,7 @@ export class LocalStateBridge {
     if (existsSync(this.socketPath)) {
       const stat = lstatSync(this.socketPath)
       if (!stat.isSocket()) {
-        console.warn(`[moodball] local bridge path is not a socket: ${this.socketPath}`)
+        console.warn(`[dsh-pet] local bridge path is not a socket: ${this.socketPath}`)
         return
       }
       const staleIdentity = socketIdentity(this.socketPath)
@@ -66,7 +68,7 @@ export class LocalStateBridge {
       probe.once('connect', () => {
         probe.destroy()
         this.probing = false
-        console.warn(`[moodball] local bridge path is already active: ${this.socketPath}`)
+        console.warn(`[dsh-pet] local bridge path is already active: ${this.socketPath}`)
       })
       probe.once('error', error => {
         probe.destroy()
@@ -74,7 +76,7 @@ export class LocalStateBridge {
         if (generation !== this.probeGeneration) return
         const code = 'code' in error ? (error as Error & { code?: string }).code : undefined
         if (code !== 'ECONNREFUSED' && code !== 'ENOENT') {
-          console.warn(`[moodball] local bridge unavailable: ${error.message}`)
+          console.warn(`[dsh-pet] local bridge unavailable: ${error.message}`)
           return
         }
         if (!sameSocketIdentity(staleIdentity, socketIdentity(this.socketPath))) return
@@ -97,7 +99,7 @@ export class LocalStateBridge {
       this.write(client)
     })
     server.on('error', (error) => {
-      console.warn(`[moodball] local bridge unavailable: ${error.message}`)
+      console.warn(`[dsh-pet] local bridge unavailable: ${error.message}`)
     })
     server.listen(this.socketPath, () => {
       const identity = socketIdentity(this.socketPath)
@@ -169,7 +171,7 @@ function preserveReplacement(path: string, owner: SocketIdentity | undefined): s
   if (owner === undefined) return undefined
   const current = socketIdentity(path)
   if (sameSocketIdentity(owner, current) || current === undefined) return undefined
-  const backup = `${path}.moodball-preserve-${randomUUID()}`
+  const backup = `${path}.dsh-pet-preserve-${randomUUID()}`
   try {
     renameSync(path, backup)
     return backup

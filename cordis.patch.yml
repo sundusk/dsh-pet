@@ -1,12 +1,12 @@
-# dsh-moodball-status bundle patch: inserts the host-only plugin row into the
+# dsh-pet bundle patch: inserts the host-only plugin row into the
 # web profile roster. Applied as a profile bundle layer (the `dsh.bundle.patch`
 # manifest field); install with
 # `dsh plugin --profile web add github:sundusk/dsh-pet`.
 #
 # The row is a bare plugin by package name: the node half (exports ".") tracks
-# agent activity and serves /api/moodball/status for the MoodBall desktop app.
+# agent activity and serves /api/dsh-pet/status for the DSH Pet desktop app.
 # There is no browser half and no settings namespace, so nothing needs host
 # whitelist support.
 - insert:
-    - id: moodball
-      name: '@sundusk/dsh-moodball-status'
+    - id: dsh-pet
+      name: '@sundusk/dsh-pet'

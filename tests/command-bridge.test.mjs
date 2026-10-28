@@ -9,7 +9,7 @@ import { CommandBridge } from '../lib/index.js'
 const snapshot = {
   state: 'thinking',
   mood: 'waiting',
-  sessionId: 'moodball-session-test',
+  sessionId: 'dsh-pet-session-test',
   workspaceId: 'workspace-test',
   taskRunning: true,
   waitingForUser: false,
@@ -61,7 +61,7 @@ function send(socket, nextLine, id, action, fields = {}) {
 }
 
 test('command bridge serves capabilities, subscription snapshots, and serialized prompt commands', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'moodball-command-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-command-'))
   const socketPath = join(root, 'command.sock')
   let active = 0
   let maxActive = 0
@@ -163,7 +163,7 @@ test('command bridge serves capabilities, subscription snapshots, and serialized
 })
 
 test('command bridge rejects malformed JSON without taking down the socket', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'moodball-command-invalid-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-command-invalid-'))
   const socketPath = join(root, 'command.sock')
   const bridge = new CommandBridge({
     imageAttachmentLimits: imageLimits(),
@@ -188,7 +188,7 @@ test('command bridge rejects malformed JSON without taking down the socket', asy
 })
 
 test('command bridge enforces deployment image limits and remains usable after oversized input', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'moodball-command-images-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-command-images-'))
   const socketPath = join(root, 'command.sock')
   const bridge = new CommandBridge({
     imageAttachmentLimits: imageLimits({ maxImageBytes: 4, maxImagesPerMessage: 2, maxMessageImageBytes: 3 }),

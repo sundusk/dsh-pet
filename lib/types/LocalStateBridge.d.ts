@@ -1,4 +1,4 @@
-/** The newline-delimited local bridge payload shared with MoodBall.app. */
+/** The newline-delimited local bridge payload shared with DSH Pet.app. */
 export interface MoodBridgePayload {
     instanceId?: string;
     state: string;
@@ -16,7 +16,7 @@ export interface MoodBridgePayload {
 /**
  * Small, opt-in local transport for the host plugin.
  *
- * The socket is deliberately a server owned by the plugin: MoodBall only
+ * The socket is deliberately a server owned by the plugin: DSH Pet only
  * observes it and never starts or stops Harness. Each client receives the
  * latest snapshot immediately, then one JSON object per line on change.
  */

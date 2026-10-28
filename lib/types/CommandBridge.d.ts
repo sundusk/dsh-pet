@@ -4,8 +4,8 @@ import type { HarnessInstanceDescriptor } from './HarnessInstance.js';
 type PromptImageMediaType = Extract<PromptContentPart, {
     type: 'image';
 }>['mediaType'];
-/** A detached workspace projection exposed to MoodBall.app. */
-export interface MoodballWorkspace {
+/** A detached workspace projection exposed to DSH Pet.app. */
+export interface DshPetWorkspace {
     id: string;
     title: string;
     path: string;
@@ -38,7 +38,7 @@ export interface ImageAttachmentLimits {
     mediaTypes: readonly string[];
 }
 /** A cold-safe ordinary Session projection for the task cards. */
-export interface MoodballTask {
+export interface DshPetTask {
     sessionId: string;
     workspaceId: string;
     title: string;
@@ -57,8 +57,8 @@ export interface MoodballTask {
 }
 export interface CommandHandlers {
     imageAttachmentLimits: ImageAttachmentLimits;
-    listWorkspaces: () => Promise<readonly MoodballWorkspace[]>;
-    listTasks: () => Promise<readonly MoodballTask[]>;
+    listWorkspaces: () => Promise<readonly DshPetWorkspace[]>;
+    listTasks: () => Promise<readonly DshPetTask[]>;
     createSession: (request: CreateSessionCommand) => Promise<{
         sessionId: string;
     }>;
@@ -71,7 +71,7 @@ export interface CommandHandlers {
 /**
  * User-local command and session-status transport.
  *
- * This socket is intentionally separate from LocalStateBridge. Older MoodBall
+ * This socket is intentionally separate from LocalStateBridge. Older DSH Pet
  * clients continue to receive the global read-only snapshot, while new
  * clients can issue authenticated-by-file-permission commands and subscribe
  * to one selected session without mixing command responses into that stream.
@@ -94,7 +94,7 @@ export declare class CommandBridge {
     /** Push a replacement snapshot to clients subscribed to this session. */
     publish(sessionId: string, snapshot: MoodBridgePayload): void;
     /** Push a replacement task projection to clients that requested task updates. */
-    publishTasks(tasks: readonly MoodballTask[]): void;
+    publishTasks(tasks: readonly DshPetTask[]): void;
     stop(): void;
     private consume;
     private rejectOversizedRequest;

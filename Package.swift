@@ -2,19 +2,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "MoodBall",
+    name: "DSHPet",
     platforms: [
         .macOS(.v14)
     ],
     targets: [
         .executableTarget(
-            name: "MoodBall",
-            path: "Sources/MoodBall"
+            name: "DSHPet",
+            path: "Sources/DSHPet"
         ),
         .testTarget(
-            name: "MoodBallTests",
-            dependencies: ["MoodBall"],
-            path: "tests/MoodBallTests"
+            name: "DSHPetTests",
+            dependencies: ["DSHPet"],
+            path: "tests/DSHPetTests"
         ),
     ]
 )

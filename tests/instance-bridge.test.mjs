@@ -177,7 +177,7 @@ async function capabilities(socket) {
 }
 
 test('two instance bridges keep identities, sockets, and discovery manifests isolated', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'moodball-instances-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-instances-'))
   const discovery = join(root, 'instances')
   const first = descriptor('instance-first', root)
   const second = descriptor('instance-second', root)
@@ -228,8 +228,8 @@ test('two instance bridges keep identities, sockets, and discovery manifests iso
 })
 
 test('a legacy active socket is never unlinked by a competing bridge stop', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'moodball-legacy-'))
-  const socketPath = join(root, 'moodball-command.sock')
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-legacy-'))
+  const socketPath = join(root, 'dsh-pet-command.sock')
   const first = new CommandBridge(handlers('legacy-owner'), socketPath)
   const contender = new CommandBridge(handlers('contender'), socketPath)
   try {
@@ -249,8 +249,8 @@ test('a legacy active socket is never unlinked by a competing bridge stop', asyn
 })
 
 test('a legacy stale socket is reclaimed after a refused probe', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'moodball-stale-'))
-  const socketPath = join(root, 'moodball-command.sock')
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-stale-'))
+  const socketPath = join(root, 'dsh-pet-command.sock')
   const stale = createServer()
   const bridge = new CommandBridge(handlers('stale-reclaimed'), socketPath)
   try {
@@ -268,8 +268,8 @@ test('a legacy stale socket is reclaimed after a refused probe', async () => {
 })
 
 test('stop does not unlink a replacement socket with a different inode', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'moodball-replacement-'))
-  const socketPath = join(root, 'moodball-command.sock')
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-replacement-'))
+  const socketPath = join(root, 'dsh-pet-command.sock')
   const bridge = new CommandBridge(handlers('owner'), socketPath)
   const replacement = createServer()
   try {
