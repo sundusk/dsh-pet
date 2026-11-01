@@ -31,7 +31,7 @@
 - **DSH Pet 桥接插件**（包名 `@sundusk/dsh-pet`）：订阅 Agent 会话事件，提供 HTTP/状态 Socket 兼容接口和用户级命令 Socket；无 Harness Web UI、无设置项
 
 旧名称和数据位置保留必要的兼容处理。安装脚本会清理旧版 `MoodBall.app`。
-当前桌面 App 版本为 **v0.8.1**，桥接插件版本为 **v0.8.2**。`DSH-Pet.app.zip` 安装包可从 [GitHub Releases](https://github.com/sundusk/dsh-pet/releases/latest) 下载；安装脚本也会自动获取最新发布的安装包。
+当前源码对应的桌面 App 版本为 **v0.8.2**，桥接插件版本为 **v0.8.2**。已发布的 `DSH-Pet.app.zip` 安装包可从 [GitHub Releases](https://github.com/sundusk/dsh-pet/releases/latest) 下载；安装脚本也会自动获取最新发布的安装包。
 
 一切配置都在 app 的设置面板里完成。新版设置面板包含六个页面：「桌宠外观」「交互与提醒」「快捷键」「宠物管理」「Harness 连接」和「关于与更新」。
 
