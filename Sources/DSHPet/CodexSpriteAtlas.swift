@@ -4,25 +4,30 @@ import CoreGraphics
 /// 保留 Codex 原图的帧序与尺寸，只映射 DSH 的状态语义。
 struct CodexSpriteAtlas {
     static let resourceName = "XinzhizhuSprites"
+    // Q 版有三帧连续闭眼；在 6.6 秒循环内快速播放，避免长时间闭眼。
+    static let jingyuniangQIdleFrameDurations: [TimeInterval] = [6.12, 0.10, 0.08, 0.08, 0.08, 0.14]
     private let cells: [[CGImage]]
     private let idleFrameCount: Int
+    private let idleFrameDurations: [TimeInterval]?
     private var importedFrameCounts: [Int]?
 
     init(
         resourceName: String = Self.resourceName,
         fileExtension: String = "webp",
         idleFrameCount: Int = 7,
+        idleFrameDurations: [TimeInterval]? = nil,
         bundle: Bundle = .main
     ) throws {
         guard let url = bundle.url(forResource: resourceName, withExtension: fileExtension) else {
             throw XiaoyuSpriteAtlasError.missingResource
         }
-        try self.init(resourceURL: url, idleFrameCount: idleFrameCount)
+        try self.init(resourceURL: url, idleFrameCount: idleFrameCount, idleFrameDurations: idleFrameDurations)
     }
 
-    init(resourceURL: URL, idleFrameCount: Int = 7) throws {
+    init(resourceURL: URL, idleFrameCount: Int = 7, idleFrameDurations: [TimeInterval]? = nil) throws {
         precondition((1...8).contains(idleFrameCount))
         self.idleFrameCount = idleFrameCount
+        self.idleFrameDurations = idleFrameDurations
         cells = try XiaoyuSpriteAtlas.decodeCells(resourceURL: resourceURL, rows: 11)
     }
 
@@ -37,6 +42,7 @@ struct CodexSpriteAtlas {
         guard let decodedImage = context.makeImage() else { throw XiaoyuSpriteAtlasError.unreadableImage }
         cells = try XiaoyuSpriteAtlas.decodeCells(image: decodedImage, rows: 11)
         idleFrameCount = 6
+        idleFrameDurations = nil
         var counts: [Int] = []
         for row in cells {
             let occupied = row.map(Self.hasVisiblePixels)
@@ -75,7 +81,9 @@ struct CodexSpriteAtlas {
         let row = Self.row(for: animation)
         let count = animation == .disconnected ? 1
             : importedFrameCounts?[row] ?? (animation == .idle ? idleFrameCount : animation.frameDurations.count)
-        return cells[row][animation.frameIndex(elapsed: elapsed, frameCount: count)]
+        return cells[row][animation.frameIndex(
+            elapsed: elapsed, frameCount: count, durations: animation == .idle ? idleFrameDurations : nil
+        )]
     }
 
     func dragFrame(for direction: XiaoyuDragDirection, elapsed: TimeInterval) -> CGImage? {

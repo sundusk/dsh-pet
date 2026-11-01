@@ -132,9 +132,10 @@ enum XiaoyuAnimation: String, CaseIterable {
         return elapsed >= 0 && elapsed < waveInteractionDuration
     }
 
-    func frameIndex(elapsed: TimeInterval, frameCount: Int? = nil) -> Int {
-        let count = frameCount ?? self.frameDurations.count
-        var frameDurations = Array(self.frameDurations.prefix(count))
+    func frameIndex(elapsed: TimeInterval, frameCount: Int? = nil, durations: [TimeInterval]? = nil) -> Int {
+        let durations = durations ?? self.frameDurations
+        let count = frameCount ?? durations.count
+        var frameDurations = Array(durations.prefix(count))
         if count > frameDurations.count, let duration = frameDurations.last {
             frameDurations += Array(repeating: duration, count: count - frameDurations.count)
         }
@@ -284,7 +285,8 @@ struct XiaoyuSpriteView: View {
         resourceName: "JingyuniangSprites", fileExtension: "png", idleFrameCount: 6
     )
     private static let jingyuniangQAtlas = try? CodexSpriteAtlas(
-        resourceName: "JingyuniangQSprites", idleFrameCount: 6
+        resourceName: "JingyuniangQSprites", idleFrameCount: 6,
+        idleFrameDurations: CodexSpriteAtlas.jingyuniangQIdleFrameDurations
     )
 
     private var codexAtlas: CodexSpriteAtlas? {

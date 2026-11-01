@@ -21,15 +21,43 @@ final class XinzhizhuSpriteTests: XCTestCase {
         let library = CustomPetLibrary(directory: directory.appendingPathComponent("unused"))
         let package = try library.validatePackage(at: directory)
         XCTAssertEqual(package.displayName, "鲸鱼娘Q版")
-        try assertSixFrameIdleAndOriginalActionRows(at: directory.appendingPathComponent("JingyuniangQSprites.webp"))
+        try assertSixFrameIdleAndOriginalActionRows(
+            at: directory.appendingPathComponent("JingyuniangQSprites.webp"),
+            idleFrameDurations: CodexSpriteAtlas.jingyuniangQIdleFrameDurations
+        )
     }
 
-    private func assertSixFrameIdleAndOriginalActionRows(at url: URL) throws {
-        let atlas = try CodexSpriteAtlas(resourceURL: url, idleFrameCount: 6)
+    func testJingyuniangQIdleBlinksBrieflyEvery6Point6Seconds() throws {
+        let url = xinzhizhuAtlasURL()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("JingyuniangQ/JingyuniangQSprites.webp")
+        let atlas = try CodexSpriteAtlas(
+            resourceURL: url, idleFrameCount: 6,
+            idleFrameDurations: CodexSpriteAtlas.jingyuniangQIdleFrameDurations
+        )
+        let source = try XiaoyuSpriteAtlas.decodeCells(resourceURL: url, rows: 11)
+        let samples: [(TimeInterval, Int)] = [
+            (0, 0), (6.11, 0), (6.17, 1), (6.21, 1), (6.23, 2),
+            (6.34, 3), (6.42, 4), (6.53, 5), (6.61, 0),
+            (12.81, 1), (12.83, 2),
+        ]
+        for (elapsed, index) in samples {
+            let frame = try XCTUnwrap(atlas.frame(for: .idle, elapsed: elapsed))
+            XCTAssertTrue(samePixels(frame, source[0][index]), "elapsed: \(elapsed)")
+        }
+    }
+
+    private func assertSixFrameIdleAndOriginalActionRows(
+        at url: URL, idleFrameDurations: [TimeInterval]? = nil
+    ) throws {
+        let atlas = try CodexSpriteAtlas(
+            resourceURL: url, idleFrameCount: 6, idleFrameDurations: idleFrameDurations
+        )
         let source = try XiaoyuSpriteAtlas.decodeCells(resourceURL: url, rows: 11)
         for animation in XiaoyuAnimation.allCases {
             let durations = animation == .idle
-                ? Array(animation.frameDurations.prefix(6)) : animation.frameDurations
+                ? idleFrameDurations ?? Array(animation.frameDurations.prefix(6)) : animation.frameDurations
             var elapsed: TimeInterval = 0
             for (index, duration) in durations.enumerated() {
                 let frame = try XCTUnwrap(atlas.frame(for: animation, elapsed: elapsed + duration / 2))
