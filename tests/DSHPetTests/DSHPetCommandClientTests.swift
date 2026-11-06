@@ -140,6 +140,28 @@ final class DSHPetCommandClientTests: XCTestCase {
     }
 
     @MainActor
+    func testAcknowledgeRemovesCompletedTaskFromPresentationAndDeck() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+
+        client.applyTaskSummaries([], establishesBaseline: true)
+        let running = task("running", updatedAt: 1, running: true, taskRunning: true, mood: "jumping")
+        let completed = task("completed", updatedAt: 2, completed: true, mood: "done")
+        client.applyTaskSummaries([running, completed])
+        client.beginActiveTaskPresentation()
+
+        XCTAssertTrue(client.activeTasks.contains { $0.id == "completed" })
+        XCTAssertEqual(client.bubbleDeck.mode, .multi)
+
+        client.acknowledgeTask("completed")
+
+        XCTAssertFalse(client.activeTasks.contains { $0.id == "completed" })
+        XCTAssertEqual(client.bubbleDeck.mode, .single)
+        XCTAssertEqual(client.bubbleDeck.pages.first?.taskID, "running")
+        XCTAssertFalse(client.isTaskUnread(completed))
+    }
+
+    @MainActor
     func testBubbleDeckKeepsWaitingTaskAfterItIsRead() {
         let (client, cleanup) = makeClient()
         defer { cleanup() }

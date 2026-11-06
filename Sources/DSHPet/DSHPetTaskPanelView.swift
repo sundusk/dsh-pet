@@ -130,10 +130,10 @@ struct DSHPetTaskPanelView: View {
     }
 
     private func taskCard(_ task: DSHPetTaskSummary) -> some View {
-        Button {
-            model.focusTask(task.id)
-        } label: {
-            HStack(spacing: 9) {
+        HStack(spacing: 9) {
+            Button {
+                model.focusTask(task.id)
+            } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(task.title)
                         .font(.system(size: 12, weight: .medium))
@@ -149,19 +149,44 @@ struct DSHPetTaskPanelView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                 }
-                Spacer(minLength: 4)
+                .frame(maxWidth: .infinity, minHeight: cardHeight, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(accessibilityLabel(for: task))
+
+            if canAcknowledge(task) {
+                Button {
+                    command.acknowledgeTask(task.id)
+                } label: {
+                    Image(systemName: task.statusIcon)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(task.failed ? Color.red : Color.green)
+                        .frame(width: 26, height: 26)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("知道了，移除任务")
+                .accessibilityLabel("知道了，移除 \(task.title)")
+            } else {
                 statusIcon(task)
             }
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: cardHeight, alignment: .leading)
-            .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .stroke(command.isTaskUnread(task) ? Color.orange.opacity(0.72) : .white.opacity(0.18), lineWidth: 0.8)
-            )
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(accessibilityLabel(for: task))
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, minHeight: cardHeight, alignment: .leading)
+        .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .stroke(command.isTaskUnread(task) ? Color.orange.opacity(0.72) : .white.opacity(0.18), lineWidth: 0.8)
+        )
+    }
+
+    private func canAcknowledge(_ task: DSHPetTaskSummary) -> Bool {
+        guard model.taskPanelMode == .active else { return false }
+        guard !task.taskRunning && !task.running else { return false }
+        return task.completed || task.failed
+            || task.state == .completed || task.state == .failed
     }
 
     private func statusLine(for task: DSHPetTaskSummary) -> String {

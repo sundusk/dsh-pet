@@ -511,6 +511,19 @@ final class DSHPetCommandClient: ObservableObject {
         continuationWarning = nil
     }
 
+    /// Acknowledge a terminal result from its trailing status button. Unlike
+    /// opening the detail card, this removes the card from the frozen active
+    /// presentation immediately and drops it from the bubble deck.
+    func acknowledgeTask(_ id: String) {
+        guard let task = tasks.first(where: { $0.id == id }),
+              DSHPetBubbleDeckBuilder.isTerminal(task) else { return }
+        readMarkers[task.id] = TaskReadMarker(updatedAt: task.updatedAt, mood: task.mood)
+        presentedActiveTaskIDs?.remove(task.id)
+        if focusedTaskID == task.id { focusedTaskID = nil }
+        persistReadMarkers()
+        rebuildBubbleDeck(now: now())
+    }
+
     func clearFocusedTask() {
         focusedTaskID = nil
         continuationWarning = nil
