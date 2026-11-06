@@ -129,6 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusSink: AnyCancellable?
     private var statusHeaderItem: NSMenuItem?
     private var togglePetMenuItem: NSMenuItem?
+    private var nextBubbleMenuItem: NSMenuItem?
+    private var aggregateBubbleMenuItem: NSMenuItem?
     private var shortcutMenuItems: [DSHPetShortcutAction: [NSMenuItem]] = [:]
     private var lastIconColor: Color?
     private let globalHotKeyManager = GlobalHotKeyManager()
@@ -224,17 +226,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 悬浮窗
 
     private func setupPanel() {
+        let bubble = showStatusBubble ? model.bubblePresentation : nil
         let width = DSHPetView.panelWidth(
             for: SettingsStore.shared.skin,
             size: SettingsStore.shared.ballSize,
             glowEnabled: SettingsStore.shared.glowEnabled,
-            showBubble: showStatusBubble
+            bubble: bubble
         )
         let height = DSHPetView.panelHeight(
             for: SettingsStore.shared.skin,
             size: SettingsStore.shared.ballSize,
             glowEnabled: SettingsStore.shared.glowEnabled,
-            showBubble: showStatusBubble
+            bubble: bubble
         )
         let panel = DSHPetPanel(
             contentRect: NSRect(x: 0, y: 0, width: width, height: height),
@@ -441,9 +444,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] newSize, skin, glowEnabled in
                 guard let self, let panel = self.panel else { return }
-                let showBubble = self.showStatusBubble
+                let bubble = self.showStatusBubble ? self.model.bubblePresentation : nil
                 panel.setFrame(self.panelFrame(
-                    ballSize: newSize, skin: skin, glowEnabled: glowEnabled, showBubble: showBubble
+                    ballSize: newSize, skin: skin, glowEnabled: glowEnabled, bubble: bubble
                 ), display: true)
                 self.updateComposerPanel()
                 self.updateHover()
@@ -452,44 +455,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 状态气泡（面板增高联动）
 
-    /// 当前是否显示状态气泡（mood 非空闲且设置开关打开）
+    /// 当前是否显示状态气泡（有可显示的卡组页且设置开关打开）
     private var showStatusBubble: Bool {
-        model.bubbleText != nil && SettingsStore.shared.showStatusBubble
+        model.bubblePresentation != nil && SettingsStore.shared.showStatusBubble
     }
 
     /// 按可见内容计算面板大小，保留宠物的水平中心和底部位置。
     private func panelFrame(
-        ballSize d: CGFloat, skin: FloatingPetSkin, glowEnabled: Bool, showBubble: Bool
+        ballSize d: CGFloat, skin: FloatingPetSkin, glowEnabled: Bool, bubble: DSHPetBubblePresentation?
     ) -> NSRect {
-        let w = DSHPetView.panelWidth(for: skin, size: d, glowEnabled: glowEnabled, showBubble: showBubble)
-        let h = DSHPetView.panelHeight(for: skin, size: d, glowEnabled: glowEnabled, showBubble: showBubble)
+        let w = DSHPetView.panelWidth(for: skin, size: d, glowEnabled: glowEnabled, bubble: bubble)
+        let h = DSHPetView.panelHeight(for: skin, size: d, glowEnabled: glowEnabled, bubble: bubble)
         let old = panel?.frame ?? NSRect(x: 0, y: 0, width: w, height: h)
         let ballCenterX = old.midX
         return NSRect(x: ballCenterX - w / 2, y: old.minY, width: w, height: h)
     }
 
     private func observeBubble() {
-        // mood 变化（气泡显隐）或设置开关变化 → 增高/缩回面板顶部
-        let moodChanges: AnyPublisher<Void, Never> = model.$mood
+        // 气泡内容/页数/设置变化 → 增高/缩回面板顶部
+        let bubbleChanges: AnyPublisher<Void, Never> = model.$bubblePresentation
             .map { _ in () as Void }
             .eraseToAnyPublisher()
         let bubbleSetting: AnyPublisher<Void, Never> = SettingsStore.shared.$showStatusBubble
             .map { _ in () as Void }
             .eraseToAnyPublisher()
-        bubbleSink = Publishers.MergeMany(moodChanges, bubbleSetting)
+        bubbleSink = Publishers.MergeMany(bubbleChanges, bubbleSetting)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self, let panel = self.panel else { return }
-                let showBubble = self.showStatusBubble
+                let bubble = self.showStatusBubble ? self.model.bubblePresentation : nil
                 let frame = self.panelFrame(
                     ballSize: SettingsStore.shared.ballSize,
                     skin: SettingsStore.shared.skin,
                     glowEnabled: SettingsStore.shared.glowEnabled,
-                    showBubble: showBubble
+                    bubble: bubble
                 )
                 if !frame.equalTo(panel.frame) {
                     panel.setFrame(frame, display: true)
-                    appLog.info("panel frame -> \(Int(frame.width))x\(Int(frame.height)) bubble=\(showBubble)")
+                    appLog.info("panel frame -> \(Int(frame.width))x\(Int(frame.height)) bubble=\(bubble != nil)")
+                    self.updateHover()
                 }
             }
     }
@@ -549,12 +553,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             insidePet = false
         }
 
+        var insideBubble = false
+        if let panel,
+           settings.showStatusBubble,
+           model.bubblePresentation?.interactive == true,
+           let bubble = model.bubblePresentation {
+            let bubbleHeight = DSHPetView.bubbleSpaceHeight(for: bubble)
+                + (settings.skin.isSprite ? DSHPetView.tailGap : 0)
+            let rect = NSRect(
+                x: panel.frame.midX - DSHPetView.multiBubblePanelWidth / 2,
+                y: panel.frame.maxY - bubbleHeight,
+                width: DSHPetView.multiBubblePanelWidth,
+                height: bubbleHeight
+            )
+            insideBubble = rect.insetBy(dx: 2, dy: 2).contains(mouse)
+        }
+
         if settings.clickThroughMode != .always,
             model.barPhase != .composer {
             let controlFrame = composerPanel?.frame.insetBy(dx: -14, dy: -18)
             let insideTaskPanel = taskPanel?.isVisible == true && taskPanel?.frame.contains(mouse) == true
             model.setComposerHovering(
                 insidePet
+                    || insideBubble
                     || controlFrame?.contains(mouse) == true
                     || insideTaskPanel
             )
@@ -570,8 +591,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 永不穿透：常驻响应（无穿透）
             if panel.ignoresMouseEvents { panel.ignoresMouseEvents = false }
         case .hover:
-            // 气泡和透明光晕不参与宠物拖拽命中。
-            let shouldIgnore = !panel.isDragging && !insidePet
+            // 气泡和透明光晕不参与宠物拖拽命中；多任务气泡可点击。
+            let shouldIgnore = !panel.isDragging && !insidePet && !insideBubble
             if panel.ignoresMouseEvents != shouldIgnore {
                 panel.ignoresMouseEvents = shouldIgnore
                 appLog.info("hover -> ignoresMouseEvents=\(shouldIgnore)")
@@ -882,6 +903,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         menu.addItem(togglePetMenuItem!)
 
+        let nextBubble = NSMenuItem(
+            title: "下一个气泡",
+            action: #selector(nextBubbleFromMenu),
+            keyEquivalent: ""
+        )
+        nextBubble.target = self
+        nextBubbleMenuItem = nextBubble
+        menu.addItem(nextBubble)
+
+        let aggregateBubble = NSMenuItem(
+            title: "回到总览气泡",
+            action: #selector(aggregateBubbleFromMenu),
+            keyEquivalent: ""
+        )
+        aggregateBubble.target = self
+        aggregateBubbleMenuItem = aggregateBubble
+        menu.addItem(aggregateBubble)
+
         menu.addItem(makeShortcutMenuItem(
             action: .openSettings,
             title: "设置…",
@@ -923,7 +962,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.setAccessibilityLabel(model.statusText)
         statusHeaderItem?.title = model.statusText
         togglePetMenuItem?.title = SettingsStore.shared.isPetVisible ? "隐藏宠物" : "显示宠物"
+        nextBubbleMenuItem?.isEnabled = model.canCycleBubbles
+        aggregateBubbleMenuItem?.isEnabled = model.canShowAggregateBubble
         applyMenuShortcuts()
+    }
+
+    @objc private func nextBubbleFromMenu() {
+        model.advanceBubble()
+    }
+
+    @objc private func aggregateBubbleFromMenu() {
+        model.showAggregateBubble()
     }
 
     private func makeShortcutMenuItem(

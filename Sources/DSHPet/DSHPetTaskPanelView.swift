@@ -83,6 +83,12 @@ struct DSHPetTaskPanelView: View {
                     .foregroundStyle(.secondary)
                 Text("当前没有进行中的任务")
                     .font(.system(size: 12, weight: .medium))
+                if command.taskListAvailable {
+                    Text("在 Harness 中运行的任务会自动出现在这里")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
                 Button("查看最近任务") { model.toggleTaskPanel(.recent) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -136,7 +142,9 @@ struct DSHPetTaskPanelView: View {
                         .multilineTextAlignment(.leading)
                     HStack(spacing: 4) {
                         Image(systemName: task.statusIcon)
-                        Text(task.statusLabel)
+                        Text(statusLine(for: task))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
@@ -153,7 +161,21 @@ struct DSHPetTaskPanelView: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(task.title)，\(task.statusLabel)")
+        .accessibilityLabel(accessibilityLabel(for: task))
+    }
+
+    private func statusLine(for task: DSHPetTaskSummary) -> String {
+        guard let workspace = command.workspaceTitle(for: task), !workspace.isEmpty else {
+            return task.statusLabel
+        }
+        return "\(task.statusLabel) · \(workspace)"
+    }
+
+    private func accessibilityLabel(for task: DSHPetTaskSummary) -> String {
+        guard let workspace = command.workspaceTitle(for: task), !workspace.isEmpty else {
+            return "\(task.title)，\(task.statusLabel)"
+        }
+        return "\(task.title)，\(task.statusLabel)，\(workspace)"
     }
 
     @ViewBuilder
@@ -185,6 +207,13 @@ struct DSHPetTaskPanelView: View {
             }
             .font(.system(size: 10))
             .foregroundStyle(.secondary)
+
+            if let workspace = command.workspaceTitle(for: task), !workspace.isEmpty {
+                Label(workspace, systemImage: "folder")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
 
             if let message = task.message, !message.isEmpty {
                 Text(message)

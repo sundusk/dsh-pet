@@ -24,6 +24,20 @@ enum MoodColorMap {
         default: return "未知"
         }
     }
+
+    /// One sprite can only show one mood; when several tasks are active, keep
+    /// the primary mood but make the total count visible in the bubble/menu.
+    static func aggregateLabel(for mood: String, taskCount: Int) -> String {
+        guard taskCount > 1 else { return label(for: mood) }
+        switch mood {
+        case "authorizing", "questioning": return "\(taskCount) 个任务等待操作"
+        case "jumping", "waiting": return "\(taskCount) 个任务进行中"
+        case "failed": return "\(taskCount) 个任务出错了"
+        case "done": return "\(taskCount) 个任务已完成"
+        case "stopped": return "\(taskCount) 个任务已停止"
+        default: return "\(taskCount) 个任务"
+        }
+    }
 }
 
 enum DSHPetBarPhase: Equatable {
@@ -48,6 +62,7 @@ final class DSHPetModel: ObservableObject {
     @Published private(set) var mood = "idle"
     @Published private(set) var color: Color = Color(hex: disconnectedHex)
     @Published private(set) var moodLabel = "未连接"
+    @Published private(set) var bubblePresentation: DSHPetBubblePresentation?
     @Published private(set) var breathingPeriod: Double = 2.0
     @Published private(set) var connectionState: ConnectionState = .unreachable
     @Published private(set) var transportKind: TransportKind = .disconnected
@@ -72,13 +87,6 @@ final class DSHPetModel: ObservableObject {
         }
     }
 
-    var bubbleText: String? {
-        switch mood {
-        case "idle", "unreachable", "disabled", "disconnected": return nil
-        default: return moodLabel
-        }
-    }
-
     @Published private(set) var wiggleTriggeredAt: Date?
 
     private let bridge: MoodBridge
@@ -87,24 +95,29 @@ final class DSHPetModel: ObservableObject {
     private var commandSnapshotCancellable: AnyCancellable?
     private var didStart = false
     private var configuredHarnessID: String?
+    private var selectedBubbleID: String?
+    private var selectedPageWasHolding = false
+    private var lastBubbleDeckMode: DSHPetBubbleDeck.Mode = .none
+    private var lastWaitingTaskIDs: Set<String> = []
 
     init() {
         bridge = MoodBridge()
         bridgeCancellable = Publishers.CombineLatest3(bridge.$snapshot, bridge.$connection, bridge.$transportKind)
             .receive(on: RunLoop.main)
-            .sink { [weak self] snapshot, connection, kind in
-                self?.transportKind = kind
-                self?.apply(snapshot, connection: connection)
-            }
-        commandSnapshotCancellable = commandClient.$sessionSnapshot
-            .receive(on: RunLoop.main)
-            .sink { [weak self] snapshot in
+            .sink { [weak self] _, _, kind in
                 guard let self else { return }
-                if let snapshot {
-                    self.apply(snapshot, connection: .connected)
-                } else {
-                    self.apply(self.bridge.snapshot, connection: self.bridge.connection)
-                }
+                self.transportKind = kind
+                self.refreshPresentation()
+            }
+        commandSnapshotCancellable = Publishers.CombineLatest4(
+            commandClient.$bubbleDeck,
+            commandClient.$connection,
+            commandClient.$taskListAvailable,
+            commandClient.$sessionSnapshot
+        )
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _, _, _ in
+                self?.refreshPresentation()
             }
         commandClient.onAccepted = { [weak self] in
             self?.barPhase = .resting
@@ -254,6 +267,151 @@ final class DSHPetModel: ObservableObject {
         return true
     }
 
+    /// Pick the best available presentation source. The command socket's task
+    /// deck wins while the task API is available; otherwise the bound Session
+    /// and finally the global bridge snapshot keep the legacy behavior.
+    private func refreshPresentation() {
+        if commandClient.connection == .connected, commandClient.taskListAvailable {
+            applyBubbleDeck(commandClient.bubbleDeck)
+            return
+        }
+        clearBubbleDeckSelection()
+        if let snapshot = commandClient.sessionSnapshot {
+            transportKind = .localSocket
+            apply(snapshot, connection: .connected)
+            return
+        }
+        apply(bridge.snapshot, connection: bridge.connection)
+    }
+
+    private func applyBubbleDeck(
+        _ deck: DSHPetBubbleDeck,
+        forceSelection: String? = nil
+    ) {
+        breathingPeriod = SettingsStore.shared.breathingSpeed
+        connected = true
+        connectionState = .connected
+        transportKind = .localSocket
+
+        switch deck.mode {
+        case .none:
+            selectedBubbleID = nil
+            selectedPageWasHolding = false
+            lastBubbleDeckMode = .none
+            lastWaitingTaskIDs = []
+            bubblePresentation = nil
+            setMood("idle", label: "空闲")
+
+        case .single:
+            guard let page = deck.pages.first else {
+                selectedBubbleID = nil
+                lastBubbleDeckMode = .single
+                lastWaitingTaskIDs = []
+                bubblePresentation = nil
+                setMood("idle", label: "空闲")
+                return
+            }
+            selectedBubbleID = page.id
+            selectedPageWasHolding = page.isHolding
+            lastBubbleDeckMode = .single
+            lastWaitingTaskIDs = deck.waitingTaskIDs
+            let label = MoodColorMap.label(for: page.mood)
+            bubblePresentation = DSHPetBubblePresentation(
+                style: .single,
+                title: label,
+                detail: nil,
+                pageNumber: nil,
+                stackDepth: 0,
+                interactive: false
+            )
+            setMood(page.mood, label: label)
+
+        case .multi:
+            guard !deck.pages.isEmpty else {
+                selectedBubbleID = nil
+                lastBubbleDeckMode = .multi
+                lastWaitingTaskIDs = []
+                bubblePresentation = nil
+                setMood("idle", label: "空闲")
+                return
+            }
+            let index = DSHPetBubbleSelection.index(
+                in: deck,
+                previousMode: lastBubbleDeckMode,
+                previousID: selectedBubbleID,
+                previousWasHolding: selectedPageWasHolding,
+                previousWaitingIDs: lastWaitingTaskIDs,
+                forcedID: forceSelection
+            )
+            let page = deck.pages[index]
+            selectedBubbleID = page.id
+            selectedPageWasHolding = page.isHolding
+            lastBubbleDeckMode = .multi
+            lastWaitingTaskIDs = deck.waitingTaskIDs
+            bubblePresentation = DSHPetBubblePresentation(
+                style: page.isAggregate ? .aggregate : .task,
+                title: page.title,
+                detail: page.detail,
+                pageNumber: index + 1,
+                stackDepth: min(2, max(0, deck.pages.count - 1)),
+                interactive: true
+            )
+            setMood(page.mood, label: page.title)
+        }
+    }
+
+    private func setMood(_ mood: String, label: String) {
+        self.mood = mood
+        moodLabel = label
+        color = mood == "disconnected"
+            ? SettingsStore.shared.disconnectedColor
+            : SettingsStore.shared.moodColors[mood] ?? SettingsStore.shared.disconnectedColor
+    }
+
+    private func clearBubbleDeckSelection() {
+        selectedBubbleID = nil
+        selectedPageWasHolding = false
+        lastBubbleDeckMode = .none
+        lastWaitingTaskIDs = []
+        bubblePresentation = nil
+    }
+
+    /// Advance the bubble deck. This never changes the composer target.
+    func advanceBubble() {
+        let deck = commandClient.bubbleDeck
+        guard commandClient.connection == .connected,
+              commandClient.taskListAvailable,
+              deck.mode == .multi,
+              deck.pages.count > 1 else { return }
+        let current = selectedBubbleID.flatMap { id in
+            deck.pages.firstIndex(where: { $0.id == id })
+        } ?? 0
+        let next = (current + 1) % deck.pages.count
+        applyBubbleDeck(deck, forceSelection: deck.pages[next].id)
+    }
+
+    func showAggregateBubble() {
+        let deck = commandClient.bubbleDeck
+        guard commandClient.connection == .connected,
+              commandClient.taskListAvailable,
+              deck.mode == .multi,
+              let first = deck.pages.first else { return }
+        applyBubbleDeck(deck, forceSelection: first.id)
+    }
+
+    var canCycleBubbles: Bool {
+        commandClient.connection == .connected
+            && commandClient.taskListAvailable
+            && commandClient.bubbleDeck.mode == .multi
+            && commandClient.bubbleDeck.pages.count > 1
+    }
+
+    var canShowAggregateBubble: Bool {
+        guard canCycleBubbles else { return false }
+        let aggregateID = commandClient.bubbleDeck.pages.first?.id
+        return selectedBubbleID != aggregateID
+    }
+
     private func apply(_ snapshot: MoodBridgeSnapshot, connection: TransportConnection) {
         breathingPeriod = SettingsStore.shared.breathingSpeed
 
@@ -261,11 +419,20 @@ final class DSHPetModel: ObservableObject {
         case .connected:
             connected = true
             connectionState = .connected
-            mood = snapshot.mood
-            moodLabel = MoodColorMap.label(for: snapshot.mood)
-            color = snapshot.mood == "disconnected"
-                ? SettingsStore.shared.disconnectedColor
-                : SettingsStore.shared.moodColors[snapshot.mood] ?? SettingsStore.shared.disconnectedColor
+            let label = MoodColorMap.label(for: snapshot.mood)
+            setMood(snapshot.mood, label: label)
+            if snapshot.mood == "idle" || snapshot.mood == "disconnected" {
+                bubblePresentation = nil
+            } else {
+                bubblePresentation = DSHPetBubblePresentation(
+                    style: .single,
+                    title: label,
+                    detail: nil,
+                    pageNumber: nil,
+                    stackDepth: 0,
+                    interactive: false
+                )
+            }
         case .pluginDisabled:
             applyPluginDisabled()
         case .unavailable:
@@ -276,6 +443,7 @@ final class DSHPetModel: ObservableObject {
     private func applyPluginDisabled() {
         connected = false
         connectionState = .pluginDisabled
+        bubblePresentation = nil
         mood = "disabled"
         color = SettingsStore.shared.disconnectedColor
         moodLabel = "插件已关闭"
@@ -284,6 +452,7 @@ final class DSHPetModel: ObservableObject {
     private func applyUnreachable() {
         connected = false
         connectionState = .unreachable
+        bubblePresentation = nil
         mood = "unreachable"
         color = SettingsStore.shared.disconnectedColor
         moodLabel = "未连接"

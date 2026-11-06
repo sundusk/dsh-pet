@@ -80,6 +80,8 @@ final class DSHPetCommandClient: ObservableObject {
     @Published private(set) var imageLimits: DSHPetImageLimits?
     @Published private(set) var workspaces: [DSHPetWorkspace] = []
     @Published private(set) var tasks: [DSHPetTaskSummary] = []
+    /// Presentation deck for the pet's status bubble.
+    @Published private(set) var bubbleDeck = DSHPetBubbleDeck.empty
     @Published private(set) var selectedWorkspaceID: String?
     @Published private(set) var sessionID: String?
     @Published private(set) var sessionSnapshot: MoodBridgeSnapshot?
@@ -119,6 +121,12 @@ final class DSHPetCommandClient: ObservableObject {
         let mood: String
     }
 
+    private struct BubbleObservation: Equatable {
+        let mood: String
+        let updatedAt: TimeInterval
+        let terminal: Bool
+    }
+
     private let defaults: UserDefaults
     private let legacySocketPath: String
     private var socketPath: String
@@ -142,9 +150,19 @@ final class DSHPetCommandClient: ObservableObject {
     private var readMarkers: [String: TaskReadMarker] = [:]
     private var hasReceivedTaskBaseline = false
     private var presentedActiveTaskIDs: Set<String>?
+    private var bubbleOrder: [String] = []
+    private var terminalHoldUntil: [String: TimeInterval] = [:]
+    private var lastBubbleObservation: [String: BubbleObservation] = [:]
+    private var bubbleHoldTask: Task<Void, Never>?
+    private let now: () -> TimeInterval
 
-    init(defaults: UserDefaults = .standard, socketPath: String = DSHPetCommandClient.defaultSocketPath) {
+    init(
+        defaults: UserDefaults = .standard,
+        socketPath: String = DSHPetCommandClient.defaultSocketPath,
+        now: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }
+    ) {
         self.defaults = defaults
+        self.now = now
         self.legacySocketPath = socketPath
         self.socketPath = socketPath
         persistedTargetBindingKey = defaults.string(forKey: Keys.targetBindingKey)
@@ -177,16 +195,21 @@ final class DSHPetCommandClient: ObservableObject {
 
     var hasWorkspace: Bool { selectedWorkspace != nil }
 
-    var currentWorkspaceTasks: [DSHPetTaskSummary] {
-        guard let selectedWorkspaceID else { return [] }
-        return tasks.filter { $0.workspaceID == selectedWorkspaceID }
+    /// Every ordinary Session projected by the bridge is a task-center
+    /// candidate. The card list deliberately does not follow the composer's
+    /// selected workspace: a task started from the Harness desktop or web UI
+    /// must appear without first using the pet to pick a workspace.
+    var taskCenterTasks: [DSHPetTaskSummary] { tasks }
+
+    func workspaceTitle(for task: DSHPetTaskSummary) -> String? {
+        workspaces.first { $0.id == task.workspaceID }?.title
     }
 
-    /// Tasks that still need attention in the selected workspace. While the
+    /// Tasks that still need attention in any registered workspace. While the
     /// active-task panel is open, its opening snapshot remains visible so a
     /// result does not disappear immediately after the user reads it.
     var activeTasks: [DSHPetTaskSummary] {
-        currentWorkspaceTasks
+        taskCenterTasks
             .filter { task in
                 return isTaskActive(task) || (presentedActiveTaskIDs?.contains(task.id) == true)
             }
@@ -199,7 +222,7 @@ final class DSHPetCommandClient: ObservableObject {
     var recentTasks: [DSHPetTaskSummary] {
         let activeTaskIDs = Set(activeTasks.map(\.id))
         return Array(
-            currentWorkspaceTasks
+            taskCenterTasks
                 .filter { !$0.blank && !activeTaskIDs.contains($0.id) }
                 .sorted(by: recentTaskPrecedes)
                 .prefix(5)
@@ -209,7 +232,7 @@ final class DSHPetCommandClient: ObservableObject {
     /// Task-center order: waiting for a user action, unread failures, unread
     /// completions, running work, then the remaining recent Sessions.
     var sortedTasks: [DSHPetTaskSummary] {
-        currentWorkspaceTasks.sorted(by: taskPrecedes)
+        taskCenterTasks.sorted(by: taskPrecedes)
     }
 
     var focusedTask: DSHPetTaskSummary? {
@@ -432,22 +455,30 @@ final class DSHPetCommandClient: ObservableObject {
             do {
                 let response = try await request(action: "workspaces", expectedGeneration: generation)
                 guard self.connectionGeneration == generation else { return }
-                let decoded = decodeWorkspaces(response["workspaces"])
-                workspaces = decoded
-                if let selectedWorkspaceID, decoded.contains(where: { $0.id == selectedWorkspaceID }) {
-                    return
-                }
-                if decoded.count == 1, let only = decoded.first {
-                    selectWorkspace(only.id)
-                } else {
-                    selectedWorkspaceID = nil
-                    defaults.removeObject(forKey: Keys.workspaceID)
-                }
+                applyWorkspaces(decodeWorkspaces(response["workspaces"]))
             } catch {
                 guard self.connectionGeneration == generation else { return }
                 record(error)
             }
         }
+    }
+
+    /// Install a workspace projection received from the bridge. Keeping the
+    /// current send target requires it to still exist; otherwise the pet must
+    /// ask for a new one before sending.
+    func applyWorkspaces(_ decoded: [DSHPetWorkspace]) {
+        workspaces = decoded
+        if let selectedWorkspaceID, decoded.contains(where: { $0.id == selectedWorkspaceID }) {
+            refreshBubbleDeck()
+            return
+        }
+        if decoded.count == 1, let only = decoded.first {
+            selectWorkspace(only.id)
+        } else {
+            selectedWorkspaceID = nil
+            defaults.removeObject(forKey: Keys.workspaceID)
+        }
+        refreshBubbleDeck()
     }
 
     func selectWorkspace(_ id: String) {
@@ -498,13 +529,28 @@ final class DSHPetCommandClient: ObservableObject {
     }
 
     /// Select a task as the input target. A non-empty draft blocks switching
-    /// to another Session so a pending message cannot be sent elsewhere.
+    /// to another Session (or another task workspace) so a pending message
+    /// cannot be sent elsewhere.
     @discardableResult
     func continueTask(_ task: DSHPetTaskSummary) -> Bool {
         guard submissionStatus != .submitting else { return false }
-        guard task.workspaceID == selectedWorkspaceID else { return false }
-        if (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty),
-           sessionID != task.sessionID {
+        let hasDraft = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty
+        if task.workspaceID != selectedWorkspaceID {
+            guard workspaces.contains(where: { $0.id == task.workspaceID }) else {
+                continuationWarning = "该任务的工作区已不可用"
+                return false
+            }
+            if pendingRequestID != nil || submissionStatus == .unconfirmed {
+                continuationWarning = "请先处理未确认的消息，再切换工作区"
+                return false
+            }
+            if hasDraft {
+                continuationWarning = "请先处理当前草稿，再切换会话"
+                return false
+            }
+            selectWorkspace(task.workspaceID)
+        }
+        if hasDraft, sessionID != task.sessionID {
             continuationWarning = "请先处理当前草稿，再切换会话"
             return false
         }
@@ -696,6 +742,7 @@ final class DSHPetCommandClient: ObservableObject {
         clearSessionBinding()
         submissionStatus = .idle
         lastError = nil
+        resetBubbleDeckState()
     }
 
     private func invalidateConnection(clearPersistedPending: Bool) {
@@ -724,6 +771,7 @@ final class DSHPetCommandClient: ObservableObject {
         taskListAvailable = false
         imageAttachmentsAvailable = false
         imageLimits = nil
+        resetBubbleDeckState()
     }
 
     private func connect() {
@@ -875,7 +923,12 @@ final class DSHPetCommandClient: ObservableObject {
                 taskListAvailable = supports.contains("tasks") && supports.contains("subscribeTasks")
                 imageAttachmentsAvailable = supports.contains("imageAttachments")
                 imageLimits = decodeImageLimits(response["attachmentLimits"])
-                if taskListAvailable { subscribeTasks(expectedGeneration: generation) } else { tasks = [] }
+                if taskListAvailable {
+                    subscribeTasks(expectedGeneration: generation)
+                } else {
+                    tasks = []
+                    refreshBubbleDeck()
+                }
                 if let sessionID { subscribe(to: sessionID, expectedGeneration: generation) }
                 refreshWorkspaces(expectedGeneration: generation)
             } catch {
@@ -884,6 +937,7 @@ final class DSHPetCommandClient: ObservableObject {
                 taskListAvailable = false
                 imageAttachmentsAvailable = false
                 imageLimits = nil
+                resetBubbleDeckState()
                 record(error)
             }
         }
@@ -1137,7 +1191,10 @@ final class DSHPetCommandClient: ObservableObject {
             hasReceivedTaskBaseline = true
             persistReadMarkers()
         }
+        let current = now()
+        observeTaskTransitions(decoded, now: current)
         tasks = decoded
+        rebuildBubbleDeck(now: current)
     }
 
     func isTaskUnread(_ task: DSHPetTaskSummary) -> Bool {
@@ -1152,11 +1209,96 @@ final class DSHPetCommandClient: ObservableObject {
         }
         readMarkers[task.id] = TaskReadMarker(updatedAt: task.updatedAt, mood: task.mood)
         persistReadMarkers()
+        rebuildBubbleDeck(now: now())
     }
 
     private func persistReadMarkers() {
         guard let data = try? JSONEncoder().encode(readMarkers) else { return }
         defaults.set(data, forKey: Keys.taskReadMarkers)
+    }
+
+    /// Rebuild the presentation deck from the current task list. Exposed to the
+    /// hold timer (and tests) because terminal results expire without another
+    /// Harness event arriving.
+    func refreshBubbleDeck() {
+        rebuildBubbleDeck(now: now())
+    }
+
+    private func resetBubbleDeckState() {
+        bubbleHoldTask?.cancel()
+        bubbleHoldTask = nil
+        bubbleOrder = []
+        terminalHoldUntil = [:]
+        lastBubbleObservation = [:]
+        if bubbleDeck != .empty { bubbleDeck = .empty }
+    }
+
+    private func observeTaskTransitions(_ decoded: [DSHPetTaskSummary], now: TimeInterval) {
+        var next: [String: BubbleObservation] = [:]
+        for task in decoded {
+            let terminal = DSHPetBubbleDeckBuilder.isTerminal(task)
+            let previous = lastBubbleObservation[task.sessionID]
+            if terminal {
+                let changed = previous.map {
+                    !$0.terminal || $0.updatedAt != task.updatedAt || $0.mood != task.mood
+                } ?? false
+                if changed {
+                    terminalHoldUntil[task.sessionID] = now + DSHPetBubbleDeckBuilder.holdDuration(for: task)
+                }
+            } else {
+                terminalHoldUntil.removeValue(forKey: task.sessionID)
+            }
+            next[task.sessionID] = BubbleObservation(
+                mood: task.mood,
+                updatedAt: task.updatedAt,
+                terminal: terminal
+            )
+        }
+        lastBubbleObservation = next
+        terminalHoldUntil = terminalHoldUntil.filter { next[$0.key] != nil }
+    }
+
+    private func rebuildBubbleDeck(now: TimeInterval) {
+        let attention = tasks.filter { task in
+            DSHPetBubbleDeckBuilder.isAttention(
+                task: task,
+                isUnread: isTaskUnread(task),
+                holdUntil: terminalHoldUntil[task.sessionID] ?? 0,
+                now: now
+            )
+        }
+        let attentionIDs = attention.map { $0.sessionID }
+        bubbleOrder = bubbleOrder.filter { attentionIDs.contains($0) }
+        for id in attentionIDs where !bubbleOrder.contains(id) {
+            bubbleOrder.append(id)
+        }
+
+        let inputs = bubbleOrder.compactMap { id in
+            tasks.first { $0.sessionID == id }.map { task in
+                DSHPetBubbleTaskInput(
+                    task: task,
+                    workspaceTitle: workspaceTitle(for: task),
+                    isUnread: isTaskUnread(task),
+                    holdUntil: terminalHoldUntil[id] ?? 0
+                )
+            }
+        }
+        let deck = DSHPetBubbleDeckBuilder.build(inputs: inputs, now: now)
+        if bubbleDeck != deck { bubbleDeck = deck }
+        scheduleBubbleHoldRefresh(now: now)
+    }
+
+    private func scheduleBubbleHoldRefresh(now: TimeInterval) {
+        bubbleHoldTask?.cancel()
+        bubbleHoldTask = nil
+        let pending = terminalHoldUntil.values.filter { $0 > now }
+        guard let next = pending.min() else { return }
+        let delay = max(0.05, next - now)
+        bubbleHoldTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.refreshBubbleDeck()
+        }
     }
 
     private func taskRank(_ task: DSHPetTaskSummary) -> Int {

@@ -42,7 +42,7 @@ final class DSHPetCommandClientTests: XCTestCase {
     }
 
     @MainActor
-    func testActiveTasksFilterWorkspaceAndFollowPriorityOrder() {
+    func testActiveTasksIncludeOtherWorkspacesAndFollowPriorityOrder() {
         let (client, cleanup) = makeClient()
         defer { cleanup() }
 
@@ -66,9 +66,193 @@ final class DSHPetCommandClientTests: XCTestCase {
 
         XCTAssertEqual(
             client.activeTasks.map(\.id),
-            ["waiting", "failed", "completed", "blank-running", "running"]
+            ["waiting", "failed", "completed", "other-workspace", "blank-running", "running"]
         )
         XCTAssertEqual(client.unreadTaskCount, 2)
+    }
+
+    @MainActor
+    func testTaskCenterShowsDesktopTasksWithoutSelectedWorkspace() {
+        let (client, cleanup) = makeClient(workspace: nil)
+        defer { cleanup() }
+
+        XCTAssertNil(client.selectedWorkspaceID)
+        client.applyTaskSummaries([
+            task("desktop-task", workspaceID: "desktop", updatedAt: 1, running: true),
+        ], establishesBaseline: true)
+
+        XCTAssertEqual(client.activeTasks.map(\.id), ["desktop-task"])
+    }
+
+    @MainActor
+    func testBubbleDeckUsesAggregateAndStableTaskOrderForMultipleTasks() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+
+        client.applyTaskSummaries([], establishesBaseline: true)
+        let first = task("first", workspaceID: "workspace-a", updatedAt: 10, running: true, taskRunning: true, mood: "jumping")
+        let second = task("second", workspaceID: "workspace-b", updatedAt: 20, running: true, taskRunning: true, mood: "waiting")
+        client.applyTaskSummaries([first, second])
+
+        XCTAssertEqual(client.bubbleDeck.mode, .multi)
+        XCTAssertEqual(client.bubbleDeck.pages.count, 3)
+        XCTAssertTrue(client.bubbleDeck.pages[0].isAggregate)
+        XCTAssertEqual(client.bubbleDeck.pages[0].title, "2 个任务进行中")
+        XCTAssertEqual(client.bubbleDeck.pages.compactMap(\.taskID), ["first", "second"])
+        XCTAssertEqual(client.bubbleDeck.totalTaskCount, 2)
+
+        // A later refresh must keep the existing card order even when the
+        // Harness list order or timestamps change.
+        client.applyTaskSummaries([second, first])
+        XCTAssertEqual(client.bubbleDeck.pages.compactMap(\.taskID), ["first", "second"])
+    }
+
+    @MainActor
+    func testBubbleDeckPriorityPrefersWaitingAndFailure() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+
+        client.applyTaskSummaries([
+            task("completed", updatedAt: 10, running: true, taskRunning: true, mood: "jumping"),
+            task("running", updatedAt: 20, running: true, taskRunning: true, mood: "jumping"),
+            task("failed", updatedAt: 30, running: true, taskRunning: true, mood: "jumping"),
+            task("waiting", updatedAt: 40, running: true, taskRunning: true, mood: "jumping"),
+        ], establishesBaseline: true)
+
+        let completed = task("completed", updatedAt: 11, completed: true, mood: "done")
+        let running = task("running", updatedAt: 20, running: true, taskRunning: true, mood: "jumping")
+        let failed = task("failed", updatedAt: 31, failed: true, mood: "failed")
+        let waiting = task("waiting", updatedAt: 41, waitingForUser: true, mood: "authorizing")
+
+        client.applyTaskSummaries([completed, running, failed, waiting])
+        XCTAssertEqual(client.bubbleDeck.pages[0].mood, "authorizing")
+        XCTAssertEqual(client.bubbleDeck.totalTaskCount, 4)
+
+        client.applyTaskSummaries([completed, running, failed])
+        XCTAssertEqual(client.bubbleDeck.pages[0].mood, "failed")
+
+        client.focusTask("failed")
+        XCTAssertEqual(client.bubbleDeck.pages[0].mood, "jumping")
+
+        client.focusTask("completed")
+        XCTAssertEqual(client.bubbleDeck.mode, .single)
+        XCTAssertEqual(client.bubbleDeck.pages.first?.taskID, "running")
+    }
+
+    @MainActor
+    func testBubbleDeckKeepsWaitingTaskAfterItIsRead() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+
+        let waiting = task("waiting", updatedAt: 1, waitingForUser: true, mood: "questioning")
+        client.applyTaskSummaries([waiting], establishesBaseline: true)
+        client.focusTask("waiting")
+
+        XCTAssertEqual(client.bubbleDeck.mode, .single)
+        XCTAssertEqual(client.bubbleDeck.pages.first?.taskID, "waiting")
+        XCTAssertEqual(client.bubbleDeck.pages.first?.mood, "questioning")
+    }
+
+    @MainActor
+    func testBubbleDeckCapsTaskPagesAtFive() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+
+        client.applyTaskSummaries([], establishesBaseline: true)
+        let tasks = (0..<6).map { index in
+            task("task-\(index)", updatedAt: TimeInterval(index + 1), running: true, taskRunning: true, mood: "jumping")
+        }
+        client.applyTaskSummaries(tasks)
+
+        XCTAssertEqual(client.bubbleDeck.mode, .multi)
+        XCTAssertEqual(client.bubbleDeck.pages.count, 6)
+        XCTAssertEqual(client.bubbleDeck.totalTaskCount, 6)
+    }
+
+    @MainActor
+    func testBubbleDeckIgnoresIdleTasks() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+
+        client.applyTaskSummaries([
+            task("idle", updatedAt: 1),
+            task("blank", updatedAt: 2, blank: true),
+        ], establishesBaseline: true)
+
+        XCTAssertEqual(client.bubbleDeck.mode, .none)
+        XCTAssertTrue(client.bubbleDeck.pages.isEmpty)
+    }
+
+    @MainActor
+    func testBubbleDeckSingleModeHidesAfterTerminalHold() {
+        var clock: TimeInterval = 100
+        let (client, cleanup) = makeClient(now: { clock })
+        defer { cleanup() }
+
+        client.applyTaskSummaries([
+            task("one", updatedAt: 1, running: true, taskRunning: true, mood: "jumping"),
+        ], establishesBaseline: true)
+        XCTAssertEqual(client.bubbleDeck.mode, .single)
+        XCTAssertEqual(client.bubbleDeck.pages.first?.isHolding, false)
+
+        clock = 101
+        client.applyTaskSummaries([
+            task("one", updatedAt: 2, completed: true, mood: "done"),
+        ])
+        XCTAssertEqual(client.bubbleDeck.mode, .single)
+        XCTAssertEqual(client.bubbleDeck.pages.first?.isHolding, true)
+        XCTAssertEqual(client.bubbleDeck.pages.first?.mood, "done")
+
+        clock = 104
+        client.refreshBubbleDeck()
+        XCTAssertEqual(client.bubbleDeck.mode, .none)
+        XCTAssertTrue(client.bubbleDeck.pages.isEmpty)
+    }
+
+    @MainActor
+    func testBubbleDeckMultiModeKeepsStaticCompletedPageAfterHold() {
+        var clock: TimeInterval = 100
+        let (client, cleanup) = makeClient(now: { clock })
+        defer { cleanup() }
+
+        let running = task("running", updatedAt: 1, running: true, taskRunning: true, mood: "jumping")
+        let completing = task("completing", updatedAt: 2, running: true, taskRunning: true, mood: "waiting")
+        client.applyTaskSummaries([running, completing], establishesBaseline: true)
+
+        clock = 101
+        client.applyTaskSummaries([
+            running,
+            task("completing", updatedAt: 3, completed: true, mood: "done"),
+        ])
+        XCTAssertEqual(client.bubbleDeck.mode, .multi)
+        XCTAssertEqual(client.bubbleDeck.pages.first?.mood, "jumping")
+        let completingPage = client.bubbleDeck.pages.first { $0.taskID == "completing" }
+        XCTAssertEqual(completingPage?.isHolding, true)
+        XCTAssertEqual(completingPage?.mood, "done")
+
+        clock = 104
+        client.refreshBubbleDeck()
+        XCTAssertEqual(client.bubbleDeck.mode, .multi)
+        XCTAssertEqual(client.bubbleDeck.pages.first?.mood, "jumping")
+        let staticPage = client.bubbleDeck.pages.first { $0.taskID == "completing" }
+        XCTAssertEqual(staticPage?.isHolding, false)
+        XCTAssertEqual(staticPage?.mood, "idle")
+    }
+
+    @MainActor
+    func testBubbleDeckReadTerminalTaskDowngradesToSingleMode() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+
+        client.applyTaskSummaries([], establishesBaseline: true)
+        let running = task("running", updatedAt: 1, running: true, taskRunning: true, mood: "jumping")
+        let completed = task("completed", updatedAt: 2, completed: true, mood: "done")
+        client.applyTaskSummaries([running, completed])
+        XCTAssertEqual(client.bubbleDeck.mode, .multi)
+
+        client.focusTask("completed")
+        XCTAssertEqual(client.bubbleDeck.mode, .single)
+        XCTAssertEqual(client.bubbleDeck.pages.first?.taskID, "running")
     }
 
     @MainActor
@@ -185,6 +369,34 @@ final class DSHPetCommandClientTests: XCTestCase {
     }
 
     @MainActor
+    func testContinueTaskSwitchesToItsWorkspaceWhenDraftIsEmpty() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+        client.applyWorkspaces([workspace("workspace"), workspace("other")])
+        let target = task("target", workspaceID: "other", updatedAt: 1)
+        client.applyTaskSummaries([target], establishesBaseline: true)
+
+        XCTAssertEqual(client.selectedWorkspaceID, "workspace")
+        XCTAssertTrue(client.continueTask(target))
+        XCTAssertEqual(client.selectedWorkspaceID, "other")
+        XCTAssertEqual(client.sessionID, "target")
+    }
+
+    @MainActor
+    func testDraftBlocksContinuingTaskInAnotherWorkspace() {
+        let (client, cleanup) = makeClient()
+        defer { cleanup() }
+        client.applyWorkspaces([workspace("workspace"), workspace("other")])
+        client.draft = "尚未发送"
+        let target = task("target", workspaceID: "other", updatedAt: 1)
+        client.applyTaskSummaries([target], establishesBaseline: true)
+
+        XCTAssertFalse(client.continueTask(target))
+        XCTAssertEqual(client.selectedWorkspaceID, "workspace")
+        XCTAssertEqual(client.continuationWarning, "请先处理当前草稿，再切换会话")
+    }
+
+    @MainActor
     func testHarnessTargetSwitchKeepsDraftAndRejectsNewSource() {
         let (client, cleanup) = makeClient()
         defer { cleanup() }
@@ -229,16 +441,27 @@ final class DSHPetCommandClientTests: XCTestCase {
     }
 
     @MainActor
-    private func makeClient(sessionID: String? = nil) -> (DSHPetCommandClient, () -> Void) {
+    private func makeClient(
+        sessionID: String? = nil,
+        workspace: String? = "workspace",
+        now: @escaping () -> TimeInterval = { 100 }
+    ) -> (DSHPetCommandClient, () -> Void) {
         let suiteName = "DSHPetCommandClientTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.set(workspaceID, forKey: "dsh-pet.command.workspaceID")
+        if let workspace {
+            defaults.set(workspace, forKey: "dsh-pet.command.workspaceID")
+        }
         if let sessionID { defaults.set(sessionID, forKey: "dsh-pet.command.sessionID") }
         let client = DSHPetCommandClient(
             defaults: defaults,
-            socketPath: "/tmp/dsh-pet-command-client-tests-unused.sock"
+            socketPath: "/tmp/dsh-pet-command-client-tests-unused.sock",
+            now: now
         )
         return (client, { defaults.removePersistentDomain(forName: suiteName) })
+    }
+
+    private func workspace(_ id: String) -> DSHPetWorkspace {
+        DSHPetWorkspace(id: id, title: id, path: "/tmp/\(id)", status: "ok", sessionIds: [])
     }
 
     private func task(

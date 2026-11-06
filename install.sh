@@ -703,7 +703,7 @@ fi
 MACOS_VERSION=$(sw_vers -productVersion 2>/dev/null || true)
 MACOS_MAJOR=${MACOS_VERSION%%.*}
 if [ -n "$MACOS_MAJOR" ] && [[ "$MACOS_MAJOR" =~ ^[0-9]+$ ]] && [ "$MACOS_MAJOR" -lt 14 ]; then
-    err "需要 macOS 14 或更高版本（当前：$MACOS_VERSION）。"
+    err "需要 macOS 14 或更高版本（当前：${MACOS_VERSION}）。"
     exit 1
 fi
 ok "macOS ${MACOS_VERSION:-已检测}"
@@ -723,7 +723,7 @@ if select_harness; then
         VERSION=$(harness_cli_version)
         [ -n "$VERSION" ] && ok "Harness 版本：$VERSION"
     elif [ "$HARNESS_TYPE" = "desktop" ]; then
-        info "请在桌面版「插件」页面安装并启用 $PLUGIN_SPEC；公开 CLI 不能管理 desktop profile。"
+        info "请在桌面版「插件」页面安装并启用 ${PLUGIN_SPEC}；公开 CLI 不能管理 desktop profile。"
     fi
 else
     warn "未检测到可绑定的 DeepSeek Harness；仍会安装 DSH Pet.app。"

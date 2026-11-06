@@ -29,9 +29,13 @@ struct DSHPetView: View {
     /// 上次单击时间（用于识别双击 → 兴奋晃动）
     @State private var lastTapAt: Date?
 
-    /// 状态气泡总高度（正文 30 + 尾巴 14），气泡出现时面板额外增高的量。
-    /// DSHPetCoordinator 同步用它计算面板高度。
+    /// 单任务状态气泡总高度（正文 30 + 尾巴 14），保留原始外观。
     static let bubbleHeight: CGFloat = 44
+    /// 多任务卡组沿用原来的 30 pt 单行气泡，只为右上角页码留 5 pt 顶部空间。
+    static let bubbleBodyHeight: CGFloat = 30
+    static let multiBubbleTopInset: CGFloat = 5
+    static let multiBubbleHeight: CGFloat = 49
+    static let multiBubblePanelWidth: CGFloat = 240
     /// 气泡尾巴尖端与球头顶部的间距
     static let tailGap: CGFloat = 4
 
@@ -39,30 +43,55 @@ struct DSHPetView: View {
         skin.isSprite ? size * (glowEnabled ? 1.55 : 1.10) : size * 2
     }
 
-    static func panelWidth(for skin: FloatingPetSkin, size: CGFloat, glowEnabled: Bool, showBubble: Bool) -> CGFloat {
-        if skin.isSprite && !showBubble {
+    static func bubbleSpaceHeight(for bubble: DSHPetBubblePresentation?) -> CGFloat {
+        guard let bubble else { return 0 }
+        return bubble.isMulti ? multiBubbleHeight : bubbleHeight
+    }
+
+    static func panelWidth(
+        for skin: FloatingPetSkin,
+        size: CGFloat,
+        glowEnabled: Bool,
+        bubble: DSHPetBubblePresentation?
+    ) -> CGFloat {
+        if let bubble, bubble.isMulti {
+            return max(size * 2, multiBubblePanelWidth)
+        }
+        if skin.isSprite && bubble == nil {
             return size * (glowEnabled ? 1.55 : 0.95)
         }
         return size * 2
     }
 
-    static func panelHeight(for skin: FloatingPetSkin, size: CGFloat, glowEnabled: Bool, showBubble: Bool) -> CGFloat {
+    static func panelHeight(
+        for skin: FloatingPetSkin,
+        size: CGFloat,
+        glowEnabled: Bool,
+        bubble: DSHPetBubblePresentation?
+    ) -> CGFloat {
         petHeight(for: skin, size: size, glowEnabled: glowEnabled)
-            + (showBubble ? bubbleHeight + (skin.isSprite ? tailGap : 0) : 0)
+            + bubbleSpaceHeight(for: bubble)
+            + (bubble != nil && skin.isSprite ? tailGap : 0)
     }
 
     var body: some View {
         let d = settings.ballSize
-        let showBubble = model.bubbleText != nil && settings.showStatusBubble
+        let bubble = settings.showStatusBubble ? model.bubblePresentation : nil
+        let showBubble = bubble != nil
         let panelWidth = Self.panelWidth(
-            for: settings.skin, size: d, glowEnabled: settings.glowEnabled, showBubble: showBubble
+            for: settings.skin, size: d, glowEnabled: settings.glowEnabled, bubble: bubble
         )
         let petHeight = Self.petHeight(for: settings.skin, size: d, glowEnabled: settings.glowEnabled)
         let bubbleSpace = Self.panelHeight(
-            for: settings.skin, size: d, glowEnabled: settings.glowEnabled, showBubble: showBubble
+            for: settings.skin, size: d, glowEnabled: settings.glowEnabled, bubble: bubble
         ) - petHeight
         // 心情球保留完整光晕；小雨窗口只包含精灵、光晕和当前显示的气泡。
         let bubbleAnchorOffset = bubbleAnchor(for: d)
+        let bubbleOffsetY: CGFloat = {
+            guard let bubble else { return 0 }
+            if bubble.isMulti { return 0 }
+            return settings.skin.isSprite ? 0 : bubbleAnchorOffset - Self.tailGap
+        }()
 
         ZStack(alignment: .top) {
             Group {
@@ -89,14 +118,18 @@ struct DSHPetView: View {
 
             // —— 状态气泡层：仅动画自身显隐，不影响布局（面板高度由外层瞬时切换）——
             ZStack(alignment: .top) {
-                if showBubble, let text = model.bubbleText {
-                    SpeechBubble(text: text, color: model.color)
-                        .offset(y: settings.skin.isSprite ? 0 : bubbleAnchorOffset - Self.tailGap)
-                        .transition(.scale(scale: 0.8, anchor: .bottom).combined(with: .opacity))
+                if let bubble {
+                    DSHPetBubbleDeckView(
+                        presentation: bubble,
+                        color: model.color,
+                        onTap: { model.advanceBubble() }
+                    )
+                    .offset(y: bubbleOffsetY)
+                    .transition(.scale(scale: 0.8, anchor: .bottom).combined(with: .opacity))
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: showBubble)
-            .allowsHitTesting(false)
+            .allowsHitTesting(bubble?.interactive == true)
         }
         // 顶部对齐使新增的气泡空间只向上延伸，宠物底部不动。
         .frame(
