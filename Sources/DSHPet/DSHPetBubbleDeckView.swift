@@ -17,12 +17,6 @@ struct DSHPetBubbleDeckView: View {
         }
     }
 
-    private var displayText: String {
-        let limit = 10
-        guard presentation.title.count > limit else { return presentation.title }
-        return String(presentation.title.prefix(limit)) + "…"
-    }
-
     private var multiBubble: some View {
         ZStack(alignment: .top) {
             ForEach(0..<max(0, presentation.stackDepth), id: \.self) { depth in
@@ -63,7 +57,7 @@ struct DSHPetBubbleDeckView: View {
     }
 
     private func bubbleBody(showText: Bool, bodyHeight: CGFloat) -> some View {
-        Text(displayText)
+        Text(presentation.title)
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(showText ? Color.black.opacity(0.8) : Color.clear)
             .lineLimit(1)
@@ -85,7 +79,7 @@ struct DSHPetBubbleDeckView: View {
     }
 
     private var accessibilityText: String {
-        var parts = [displayText]
+        var parts = [presentation.title]
         if let pageNumber = presentation.pageNumber { parts.append("第 \(pageNumber) 页") }
         if presentation.interactive { parts.append("点击切换") }
         return parts.joined(separator: "，")

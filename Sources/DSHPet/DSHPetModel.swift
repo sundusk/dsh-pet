@@ -348,15 +348,16 @@ final class DSHPetModel: ObservableObject {
             selectedPageWasHolding = page.isHolding
             lastBubbleDeckMode = .multi
             lastWaitingTaskIDs = deck.waitingTaskIDs
+            let displayText = page.isAggregate ? page.title : page.bubbleText
             bubblePresentation = DSHPetBubblePresentation(
                 style: page.isAggregate ? .aggregate : .task,
-                title: page.title,
+                title: displayText,
                 detail: page.detail,
                 pageNumber: index + 1,
                 stackDepth: min(2, max(0, deck.pages.count - 1)),
                 interactive: true
             )
-            setMood(page.mood, label: page.title)
+            setMood(page.mood, label: displayText)
         }
     }
 

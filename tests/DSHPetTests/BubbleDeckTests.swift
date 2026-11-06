@@ -19,21 +19,26 @@ final class BubbleDeckTests: XCTestCase {
         XCTAssertTrue(deck.pages[0].isAggregate)
         XCTAssertEqual(deck.pages[0].mood, "authorizing")
         XCTAssertEqual(deck.pages[0].title, "4 个任务等待操作")
+        XCTAssertEqual(deck.pages[0].bubbleText, "4 个任务等待操作")
 
         let waitingPage = deck.pages.first { $0.taskID == "b" }
+        XCTAssertEqual(waitingPage?.bubbleText, "等待你的授权")
         XCTAssertEqual(waitingPage?.detail, "dsh-pet · 等待授权")
         XCTAssertEqual(waitingPage?.isWaiting, true)
 
         let runningPage = deck.pages.first { $0.taskID == "a" }
+        XCTAssertEqual(runningPage?.bubbleText, "工具调用")
         XCTAssertEqual(runningPage?.detail, "dsh-pet · bash")
 
         let failedPage = deck.pages.first { $0.taskID == "c" }
         XCTAssertEqual(failedPage?.mood, "failed")
+        XCTAssertEqual(failedPage?.bubbleText, "出错了")
         XCTAssertEqual(failedPage?.isHolding, true)
         XCTAssertEqual(failedPage?.detail, "other · 失败")
 
         let completedPage = deck.pages.first { $0.taskID == "d" }
         XCTAssertEqual(completedPage?.mood, "done")
+        XCTAssertEqual(completedPage?.bubbleText, "搞定啦")
     }
 
     func testStoppedTaskOnlyAppearsDuringItsResultHold() {
@@ -48,6 +53,7 @@ final class BubbleDeckTests: XCTestCase {
         )
         XCTAssertEqual(held.mode, .single)
         XCTAssertEqual(held.pages.first?.mood, "stopped")
+        XCTAssertEqual(held.pages.first?.bubbleText, "已停止")
 
         let multi = DSHPetBubbleDeckBuilder.build(
             inputs: [input(running("running")), input(stoppedTask, holdUntil: 103)],
@@ -104,6 +110,7 @@ final class BubbleDeckTests: XCTestCase {
         let old = multiDeck.pages.first { $0.taskID == "old" }
         XCTAssertEqual(old?.isHolding, false)
         XCTAssertEqual(old?.mood, "idle")
+        XCTAssertEqual(old?.bubbleText, "搞定啦")
     }
 
     func testTaskPagesAreCappedButTotalCountIsKept() {

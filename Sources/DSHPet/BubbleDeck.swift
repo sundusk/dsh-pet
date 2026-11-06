@@ -10,8 +10,11 @@ struct DSHPetBubblePage: Equatable, Identifiable {
 
     let id: String
     let kind: Kind
-    /// Aggregate: the count/status sentence. Task: the task title.
+    /// Aggregate: the count/status sentence. Task: the full task title.
     let title: String
+    /// The single-line text rendered in the bubble. Task pages keep the
+    /// original action/result wording ("工具调用", "搞定啦", ...), not the title.
+    let bubbleText: String
     /// Task: "workspace · tool/status"; aggregate has no second line.
     let detail: String?
     /// Mood used by the single pet sprite while this page is selected.
@@ -155,10 +158,12 @@ enum DSHPetBubbleDeckBuilder {
         let visible = Array(attention.prefix(maxTaskPages))
         let aggregateMood = aggregateActionMood(from: attention, now: now)
         let labelMood = aggregateLabelMood(from: attention, actionMood: aggregateMood)
+        let aggregateTitle = MoodColorMap.aggregateLabel(for: labelMood, taskCount: total)
         let aggregate = DSHPetBubblePage(
             id: "aggregate",
             kind: .aggregate,
-            title: MoodColorMap.aggregateLabel(for: labelMood, taskCount: total),
+            title: aggregateTitle,
+            bubbleText: aggregateTitle,
             detail: nil,
             mood: aggregateMood,
             taskID: nil,
@@ -198,10 +203,22 @@ enum DSHPetBubbleDeckBuilder {
         let title = trimmedTitle.isEmpty
             ? "会话 \(task.sessionID.suffix(8))"
             : trimmedTitle
+        let terminalMood: String
+        if isFailed(task) {
+            terminalMood = "failed"
+        } else if isCompleted(task) {
+            terminalMood = "done"
+        } else if isStopped(task) {
+            terminalMood = "stopped"
+        } else {
+            terminalMood = mood
+        }
+        let bubbleText = MoodColorMap.label(for: terminal ? terminalMood : mood)
         return DSHPetBubblePage(
             id: task.sessionID,
             kind: .task,
             title: title,
+            bubbleText: bubbleText,
             detail: detail(for: input),
             mood: mood,
             taskID: task.sessionID,
