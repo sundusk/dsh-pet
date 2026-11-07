@@ -1,7 +1,8 @@
 /**
- * dsh-pet host plugin — a pure Harness status bridge (no browser
- * UI, no settings namespace) that tracks agent activity and serves a stable
- * snapshot over HTTP and a local Unix socket for the DSH Pet macOS desktop app.
+ * dsh-pet host plugin — a Harness status bridge (no rendered browser UI, no
+ * settings namespace) that tracks agent activity, serves a stable snapshot over
+ * HTTP and a local Unix socket, and queues Session-open requests for the tiny
+ * browser half.
  * Install
  * via `dsh plugin --profile web add github:sundusk/dsh-pet`.
  * @module @sundusk/dsh-pet
@@ -14,6 +15,7 @@ import type { PromptContentPart } from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import {
   CommandBridge,
@@ -402,6 +404,43 @@ export function apply(ctx: Context): void {
     return result
   }
 
+  interface PendingSessionOpen {
+    requestId: string
+    workspaceId: string
+    sessionId: string
+    deliveredAt?: number
+    timer: ReturnType<typeof setTimeout>
+    resolve: (accepted: boolean) => void
+  }
+
+  const pendingSessionOpens = new Map<string, PendingSessionOpen>()
+
+  const settlePendingSessionOpen = (requestId: string, accepted: boolean): boolean => {
+    const pending = pendingSessionOpens.get(requestId)
+    if (pending === undefined) return false
+    clearTimeout(pending.timer)
+    pendingSessionOpens.delete(requestId)
+    pending.resolve(accepted)
+    return true
+  }
+
+  const requestSessionOpen = (workspaceId: string, sessionId: string): Promise<boolean> => {
+    const requestId = randomUUID()
+    return new Promise<boolean>(resolve => {
+      const timer = setTimeout(() => {
+        pendingSessionOpens.delete(requestId)
+        resolve(false)
+      }, 8_000)
+      pendingSessionOpens.set(requestId, {
+        requestId,
+        workspaceId,
+        sessionId,
+        timer,
+        resolve,
+      })
+    })
+  }
+
   commandBridge = new CommandBridge({
     imageAttachmentLimits: (ctx as unknown as {
       attachments: { imageLimits: ImageAttachmentLimits }
@@ -429,6 +468,19 @@ export function apply(ctx: Context): void {
       stateFor(String(result.sessionId), String(workspace.id)).workspaceId = String(workspace.id)
       return { sessionId: String(result.sessionId) }
     }),
+    openSession: async request => {
+      const workspace = ctx.workspaceRegistry.get(request.workspaceId as never)
+      if (workspace === undefined) throw new Error(`workspace "${request.workspaceId}" not found`)
+      if (!workspace.sessionIds.some(candidate => String(candidate) === request.sessionId)) {
+        throw new Error(`session "${request.sessionId}" is not attached to workspace "${request.workspaceId}"`)
+      }
+      if (!await requestSessionOpen(request.workspaceId, request.sessionId)) {
+        const error = new Error('Harness client did not acknowledge the session open')
+        Object.assign(error, { code: 'desktop-client-unavailable' })
+        throw error
+      }
+      return { accepted: true as const, sessionId: request.sessionId }
+    },
     prompt: request => serializeSession(request.sessionId, async () => {
       const workspace = ctx.workspaceRegistry.get(request.workspaceId as never)
       if (workspace === undefined) throw new Error(`workspace "${request.workspaceId}" not found`)
@@ -485,6 +537,66 @@ export function apply(ctx: Context): void {
     }
   }, 'dsh-pet: local bridges')
 
+  const sessionOpenPendingRoute: WebRoute = {
+    kind: 'exact',
+    path: '/api/dsh-pet/session-open/pending',
+    handler: (req: IncomingMessage, res: ServerResponse): void => {
+      if (req.method !== 'GET') {
+        json(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      const now = Date.now()
+      const pending = [...pendingSessionOpens.values()].find(candidate =>
+        candidate.deliveredAt === undefined || now - candidate.deliveredAt > 2_000)
+      if (pending === undefined) {
+        json(res, 200, { request: null })
+        return
+      }
+      pending.deliveredAt = now
+      json(res, 200, {
+        request: {
+          requestId: pending.requestId,
+          workspaceId: pending.workspaceId,
+          sessionId: pending.sessionId,
+        },
+      })
+    },
+  }
+
+  const sessionOpenAckRoute: WebRoute = {
+    kind: 'exact',
+    path: '/api/dsh-pet/session-open/ack',
+    handler: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+      if (req.method !== 'POST') {
+        json(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      let body = ''
+      for await (const chunk of req) {
+        body += String(chunk)
+        if (Buffer.byteLength(body) > 4_096) {
+          json(res, 413, { ok: false, error: 'request-too-large' })
+          return
+        }
+      }
+      let requestId: unknown
+      try {
+        requestId = JSON.parse(body).requestId
+      } catch {
+        requestId = undefined
+      }
+      if (typeof requestId !== 'string' || requestId === '') {
+        json(res, 400, { ok: false, error: 'invalid-request' })
+        return
+      }
+      if (!settlePendingSessionOpen(requestId, true)) {
+        json(res, 404, { ok: false, error: 'unknown-request' })
+        return
+      }
+      json(res, 200, { ok: true })
+    },
+  }
+
   const statusRoute: WebRoute = {
     kind: 'exact',
     path: '/api/dsh-pet/status',
@@ -506,9 +618,18 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const dispose = ctx.webServer.register(statusRoute)
     const disposeLegacy = ctx.webServer.register(legacyStatusRoute)
+    const disposePending = ctx.webServer.register(sessionOpenPendingRoute)
+    const disposeAck = ctx.webServer.register(sessionOpenAckRoute)
     return () => {
+      disposeAck()
+      disposePending()
+      for (const pending of pendingSessionOpens.values()) {
+        clearTimeout(pending.timer)
+        pending.resolve(false)
+      }
+      pendingSessionOpens.clear()
       disposeLegacy()
       dispose()
     }
-  }, 'dsh-pet: status routes')
+  }, 'dsh-pet: status and session-open routes')
 }

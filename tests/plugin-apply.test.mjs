@@ -79,6 +79,8 @@ test('plugin adapter calls official-style workspace and session services', async
 
   let eventHandler
   let statusRoute
+  let pendingRoute
+  let ackRoute
   const routes = []
   const cleanups = []
   const calls = []
@@ -141,6 +143,8 @@ test('plugin adapter calls official-style workspace and session services', async
       register: route => {
         routes.push(route)
         if (route.path === '/api/dsh-pet/status') statusRoute = route
+        if (route.path === '/api/dsh-pet/session-open/pending') pendingRoute = route
+        if (route.path === '/api/dsh-pet/session-open/ack') ackRoute = route
         return () => {}
       },
     },
@@ -211,7 +215,12 @@ test('plugin adapter calls official-style workspace and session services', async
     assert.equal(taskEvent.tasks[0].mood, 'waiting')
 
     let routeBody
-    assert.deepEqual(routes.map(route => route.path), ['/api/dsh-pet/status', '/api/moodball/status'])
+    assert.deepEqual(routes.map(route => route.path), [
+      '/api/dsh-pet/status',
+      '/api/moodball/status',
+      '/api/dsh-pet/session-open/pending',
+      '/api/dsh-pet/session-open/ack',
+    ])
     statusRoute.handler(
       { method: 'GET' },
       { writeHead: status => assert.equal(status, 200), end: body => { routeBody = JSON.parse(body) } },
@@ -219,6 +228,36 @@ test('plugin adapter calls official-style workspace and session services', async
     assert.equal(routeBody.ok, true)
     assert.equal(routeBody.sessionId, 'dsh-pet-session-test')
     assert.equal(routeBody.instanceId, instance.instanceId)
+
+    const openResponse = command(socket, nextLine, 'open-session', 'openSession', {
+      workspaceId: workspace.id,
+      sessionId: 'dsh-pet-session-test',
+    })
+    let pendingBody
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      pendingRoute.handler(
+        { method: 'GET' },
+        { writeHead: status => assert.equal(status, 200), end: body => { pendingBody = JSON.parse(body) } },
+      )
+      if (pendingBody?.request !== null) break
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal(pendingBody.request.sessionId, 'dsh-pet-session-test')
+    let ackBody
+    const ackRequest = {
+      method: 'POST',
+      async *[Symbol.asyncIterator]() {
+        yield JSON.stringify({ requestId: pendingBody.request.requestId })
+      },
+    }
+    await ackRoute.handler(
+      ackRequest,
+      { writeHead: status => assert.equal(status, 200), end: body => { ackBody = JSON.parse(body) } },
+    )
+    assert.equal(ackBody.ok, true)
+    const opened = await openResponse
+    assert.equal(opened.accepted, true)
+    assert.equal(opened.sessionId, 'dsh-pet-session-test')
     socket.destroy()
   } finally {
     for (const cleanup of cleanups.reverse()) cleanup()

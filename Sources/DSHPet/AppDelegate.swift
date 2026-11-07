@@ -556,17 +556,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var insideBubble = false
         if let panel,
            settings.showStatusBubble,
-           model.bubblePresentation?.interactive == true,
            let bubble = model.bubblePresentation {
-            let bubbleHeight = DSHPetView.bubbleSpaceHeight(for: bubble)
-                + (settings.skin.isSprite ? DSHPetView.tailGap : 0)
-            let rect = NSRect(
-                x: panel.frame.midX - DSHPetView.multiBubblePanelWidth / 2,
-                y: panel.frame.maxY - bubbleHeight,
-                width: DSHPetView.multiBubblePanelWidth,
-                height: bubbleHeight
-            )
-            insideBubble = rect.insetBy(dx: 2, dy: 2).contains(mouse)
+            let bubbleCanReceiveInput = bubble.interactive || bubble.taskID != nil
+            if bubbleCanReceiveInput {
+                let bubbleHeight = DSHPetView.bubbleSpaceHeight(for: bubble)
+                    + (settings.skin.isSprite ? DSHPetView.tailGap : 0)
+                let bubbleWidth = bubble.isMulti ? DSHPetView.multiBubblePanelWidth : panel.frame.width
+                let rect = NSRect(
+                    x: panel.frame.midX - bubbleWidth / 2,
+                    y: panel.frame.maxY - bubbleHeight,
+                    width: bubbleWidth,
+                    height: bubbleHeight
+                )
+                insideBubble = rect.insetBy(dx: 2, dy: 2).contains(mouse)
+            }
         }
 
         if settings.clickThroughMode != .always,

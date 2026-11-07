@@ -582,6 +582,40 @@ final class DSHPetCommandClient: ObservableObject {
         return true
     }
 
+    /// Ask the Harness client half to focus this exact Session. The workspace
+    /// membership check keeps a stale or forged task summary from selecting a
+    /// Session outside the instance currently connected to DSH Pet.
+    func openTaskSession(_ task: DSHPetTaskSummary) {
+        guard connection == .connected, capabilitiesValidated else {
+            lastError = DSHPetCommandError.unavailable.errorDescription
+            return
+        }
+        guard let workspace = workspaces.first(where: { $0.id == task.workspaceID }),
+              workspace.sessionIds.contains(task.sessionID) else {
+            lastError = "该任务已不属于当前 Harness 工作区"
+            return
+        }
+        let generation = connectionGeneration
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await request(
+                    action: "openSession",
+                    fields: ["workspaceId": task.workspaceID, "sessionId": task.sessionID],
+                    timeout: 12,
+                    expectedGeneration: generation
+                )
+                guard self.connectionGeneration == generation else { return }
+                lastError = nil
+                focusedTaskID = task.id
+                markTaskRead(task)
+            } catch {
+                guard self.connectionGeneration == generation else { return }
+                lastError = errorMessage(error)
+            }
+        }
+    }
+
     func refreshTasks() {
         guard taskListAvailable else { return }
         let generation = connectionGeneration

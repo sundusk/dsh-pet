@@ -1,6 +1,6 @@
 # DSH Pet 命令协议
 
-本文档描述 `@sundusk/dsh-pet` 与 DSH Pet.app 之间的本地协议。它是用户当前 macOS 账户下的 Unix Socket，插件拥有服务端，App 只连接和观察；协议不启动、停止或重启 DeepSeek Harness，也不提供未鉴权的 HTTP 写接口。
+本文档描述 `@sundusk/dsh-pet` 与 DSH Pet.app 之间的本地协议。主通道是用户当前 macOS 账户下的 Unix Socket，插件拥有服务端，App 只连接和观察；协议不启动、停止或重启 DeepSeek Harness。会话跳转另有一个只传递 Session ID 的本地 HTTP 队列，不能创建、修改或提交任何 Agent 内容。
 
 ## Socket
 
@@ -46,6 +46,25 @@ Socket/HTTP 时继续显示宠物状态并禁用发送。
 ```
 
 插件验证工作区后调用官方 `ctx.sessionController.create({ workspaceId, sessionId })`。App 会持久化这个固定 Session ID，因此同一次重试会被 Harness 幂等接纳，不会因为超时重复创建会话。
+
+### `openSession`
+
+```json
+{
+  "id":"r4",
+  "action":"openSession",
+  "workspaceId":"...",
+  "sessionId":"..."
+}
+```
+
+插件验证 Session 属于目标工作区后，把 `{ requestId, workspaceId, sessionId }` 放入一个短生命周期的待处理队列：
+
+- Harness 浏览器半区轮询 `GET /api/dsh-pet/session-open/pending`，取得请求后调用官方客户端 `ctx.uiWorkspace.openSession(sessionId)`；
+- 成功调用后向 `POST /api/dsh-pet/session-open/ack` 发送 `{"requestId":"..."}`；
+- 插件收到确认后向 Pet.app 返回 `{"accepted":true,"sessionId":"..."}`；8 秒内没有客户端确认则返回 `desktop-client-unavailable`。
+
+这两个 HTTP 端点只用于“打开已有 Session”，不携带 prompt、图片或设置，也不会启动新的 Agent 任务。浏览器半区不渲染 UI，只在 Harness 客户端加载时运行。
 
 ### `prompt`
 

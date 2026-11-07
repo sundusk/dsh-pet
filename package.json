@@ -1,7 +1,7 @@
 {
   "name": "@sundusk/dsh-pet",
-  "description": "DeepSeek Harness Agent status bridge for the DSH Pet macOS desktop pets: a host-only plugin with HTTP compatibility and a local Unix socket transport.",
-  "version": "0.8.2",
+  "description": "DeepSeek Harness Agent status bridge for the DSH Pet macOS desktop pets: a host-only status/command transport plus a small browser half that opens the Session selected in the pet.",
+  "version": "0.9.0",
   "type": "module",
   "repository": {
     "type": "git",
@@ -27,15 +27,24 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./client": {
+      "default": "./lib/client.js"
+    },
     "./package.json": "./package.json"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ],
+      "platform": "web"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsdown",
+    "build": "tsc -p tsconfig.build.json && tsdown && node scripts/build-client.mjs",
     "test:protocol": "pnpm build && node --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "watch": "tsdown --watch"

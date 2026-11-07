@@ -42,6 +42,8 @@ struct DSHPetBubblePresentation: Equatable {
     let pageNumber: Int?
     let stackDepth: Int
     let interactive: Bool
+    /// Session represented by this page; aggregate and legacy bubbles are nil.
+    let taskID: String?
 
     var isMulti: Bool { style != .single }
 }

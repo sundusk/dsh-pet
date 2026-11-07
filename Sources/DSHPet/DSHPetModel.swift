@@ -322,7 +322,8 @@ final class DSHPetModel: ObservableObject {
                 detail: nil,
                 pageNumber: nil,
                 stackDepth: 0,
-                interactive: false
+                interactive: false,
+                taskID: page.taskID
             )
             setMood(page.mood, label: label)
 
@@ -355,7 +356,8 @@ final class DSHPetModel: ObservableObject {
                 detail: page.detail,
                 pageNumber: index + 1,
                 stackDepth: min(2, max(0, deck.pages.count - 1)),
-                interactive: true
+                interactive: true,
+                taskID: page.taskID
             )
             setMood(page.mood, label: displayText)
         }
@@ -389,6 +391,20 @@ final class DSHPetModel: ObservableObject {
         } ?? 0
         let next = (current + 1) % deck.pages.count
         applyBubbleDeck(deck, forceSelection: deck.pages[next].id)
+    }
+
+    /// Open the Session represented by the currently visible task bubble.
+    /// Aggregate and legacy status bubbles intentionally remain inert.
+    func openBubbleTask() {
+        guard let taskID = bubblePresentation?.taskID,
+              let task = commandClient.tasks.first(where: { $0.id == taskID }) else { return }
+        // Bring the exact selected Harness instance forward before its client
+        // half selects the Session.
+        harnessConnections.open(
+            legacyWebAddress: SettingsStore.shared.apiBase,
+            legacyConnected: connected && transportKind == .http
+        )
+        commandClient.openTaskSession(task)
     }
 
     func showAggregateBubble() {
@@ -431,7 +447,8 @@ final class DSHPetModel: ObservableObject {
                     detail: nil,
                     pageNumber: nil,
                     stackDepth: 0,
-                    interactive: false
+                    interactive: false,
+                    taskID: nil
                 )
             }
         case .pluginDisabled:

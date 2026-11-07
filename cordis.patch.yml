@@ -4,9 +4,10 @@
 # `dsh plugin --profile web add github:sundusk/dsh-pet`.
 #
 # The row is a bare plugin by package name: the node half (exports ".") tracks
-# agent activity and serves /api/dsh-pet/status for the DSH Pet desktop app.
-# There is no browser half and no settings namespace, so nothing needs host
-# whitelist support.
+# agent activity and serves /api/dsh-pet/status plus the session-open queue.
+# The package also declares a tiny browser half (exports "./client") that only
+# forwards a queued Session id to uiWorkspace.openSession; it renders no UI and
+# needs no settings namespace.
 - insert:
     - id: dsh-pet
       name: '@sundusk/dsh-pet'

@@ -86,6 +86,7 @@ test('command bridge serves capabilities, subscription snapshots, and serialized
       completed: false,
     }],
     createSession: async request => ({ sessionId: request.sessionId }),
+    openSession: async request => ({ accepted: true, sessionId: request.sessionId }),
     prompt: async request => {
       active += 1
       maxActive = Math.max(maxActive, active)
@@ -104,7 +105,7 @@ test('command bridge serves capabilities, subscription snapshots, and serialized
   assert.equal(capabilities.ok, true)
   assert.deepEqual(capabilities.supports, [
     'workspaces', 'tasks', 'subscribeTasks', 'unsubscribeTasks',
-    'createSession', 'prompt', 'imageAttachments', 'subscribe', 'unsubscribe',
+    'createSession', 'openSession', 'prompt', 'imageAttachments', 'subscribe', 'unsubscribe',
   ])
   assert.deepEqual(capabilities.attachmentLimits, imageLimits())
   assert.ok(capabilities.maxCommandBytes > imageLimits().maxMessageImageBytes)
@@ -117,6 +118,12 @@ test('command bridge serves capabilities, subscription snapshots, and serialized
 
   const subscribedTasks = await send(socket, nextLine, 'tasks-sub', 'subscribeTasks')
   assert.equal(subscribedTasks.tasks[0].sessionId, snapshot.sessionId)
+
+  const opened = await send(socket, nextLine, 'open-session', 'openSession', {
+    workspaceId: snapshot.workspaceId, sessionId: snapshot.sessionId,
+  })
+  assert.equal(opened.accepted, true)
+  assert.equal(opened.sessionId, snapshot.sessionId)
 
   const subscribed = await send(socket, nextLine, 'sub', 'subscribe', { sessionId: snapshot.sessionId })
   assert.deepEqual(subscribed.snapshot, snapshot)
@@ -170,6 +177,7 @@ test('command bridge rejects malformed JSON without taking down the socket', asy
     listWorkspaces: async () => [],
     listTasks: async () => [],
     createSession: async request => ({ sessionId: request.sessionId }),
+    openSession: async request => ({ accepted: true, sessionId: request.sessionId }),
     prompt: async request => ({ accepted: true, sessionId: request.sessionId }),
     snapshotFor: () => undefined,
   }, socketPath)
@@ -195,6 +203,7 @@ test('command bridge enforces deployment image limits and remains usable after o
     listWorkspaces: async () => [],
     listTasks: async () => [],
     createSession: async request => ({ sessionId: request.sessionId }),
+    openSession: async request => ({ accepted: true, sessionId: request.sessionId }),
     prompt: async request => {
       if (request.requestId === 'server-error') {
         const error = new Error('Model does not support image input.')

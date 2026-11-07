@@ -128,6 +128,7 @@ function handlers(instanceId) {
     listWorkspaces: async () => [],
     listTasks: async () => [],
     createSession: async request => ({ sessionId: request.sessionId }),
+    openSession: async request => ({ accepted: true, sessionId: request.sessionId }),
     prompt: async request => ({ accepted: true, sessionId: request.sessionId }),
     snapshotFor: () => snapshot,
   }

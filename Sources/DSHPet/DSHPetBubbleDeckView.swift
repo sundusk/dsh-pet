@@ -8,10 +8,11 @@ struct DSHPetBubbleDeckView: View {
     let presentation: DSHPetBubblePresentation
     let color: Color
     let onTap: () -> Void
+    let onDoubleTap: () -> Void
 
     var body: some View {
         if presentation.style == .single {
-            SpeechBubble(text: presentation.title, color: color)
+            interactiveBubble(SpeechBubble(text: presentation.title, color: color))
         } else {
             multiBubble
         }
@@ -48,12 +49,27 @@ struct DSHPetBubbleDeckView: View {
         }
         .padding(.top, DSHPetView.multiBubbleTopInset)
         .contentShape(Rectangle())
-        .onTapGesture {
-            if presentation.interactive { onTap() }
-        }
-        .help(presentation.interactive ? "点击切换任务气泡" : "")
+        .gesture(tapGesture)
+        .help(helpText)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
+    }
+
+    private var tapGesture: some Gesture {
+        TapGesture(count: 2)
+            .onEnded {
+                if presentation.taskID != nil { onDoubleTap() }
+            }
+            .exclusively(before: TapGesture(count: 1).onEnded {
+                if presentation.interactive { onTap() }
+            })
+    }
+
+    private func interactiveBubble<Content: View>(_ content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .gesture(tapGesture)
+            .help(helpText)
     }
 
     private func bubbleBody(showText: Bool, bodyHeight: CGFloat) -> some View {
@@ -82,6 +98,15 @@ struct DSHPetBubbleDeckView: View {
         var parts = [presentation.title]
         if let pageNumber = presentation.pageNumber { parts.append("第 \(pageNumber) 页") }
         if presentation.interactive { parts.append("点击切换") }
+        if presentation.taskID != nil { parts.append("双击打开 Harness 会话") }
         return parts.joined(separator: "，")
+    }
+
+    private var helpText: String {
+        if presentation.taskID != nil && presentation.interactive {
+            return "单击切换任务气泡，双击打开 Harness 会话"
+        }
+        if presentation.taskID != nil { return "双击打开 Harness 会话" }
+        return presentation.interactive ? "点击切换任务气泡" : ""
     }
 }

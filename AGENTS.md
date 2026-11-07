@@ -1,3 +1,9 @@
+# DeepSeek Harness 源码参考
+
+官方源码仓库：https://github.com/deepseek-ai/deepseek-harness
+
+为本项目新增或修改功能时，如果不清楚 DeepSeek Harness 是否支持所需能力，应主动查阅官方源码及相关接口后再判断。注意核对目标 Harness 版本；仓库最新代码与用户安装版本可能不同，无法验证时应说明不确定性。
+
 # 本地安装交付
 
 用户要求在本机安装或更新 DSH Pet，或明确要求发版包含本地安装时：

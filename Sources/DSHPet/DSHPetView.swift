@@ -122,14 +122,15 @@ struct DSHPetView: View {
                     DSHPetBubbleDeckView(
                         presentation: bubble,
                         color: model.color,
-                        onTap: { model.advanceBubble() }
+                        onTap: { model.advanceBubble() },
+                        onDoubleTap: { model.openBubbleTask() }
                     )
                     .offset(y: bubbleOffsetY)
                     .transition(.scale(scale: 0.8, anchor: .bottom).combined(with: .opacity))
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: showBubble)
-            .allowsHitTesting(bubble?.interactive == true)
+            .allowsHitTesting(bubble?.interactive == true || bubble?.taskID != nil)
         }
         // 顶部对齐使新增的气泡空间只向上延伸，宠物底部不动。
         .frame(
@@ -291,7 +292,11 @@ struct DSHPetView: View {
                     if let last = lastTapAt, now.timeIntervalSince(last) < 0.35 {
                         lastTapAt = nil
                         model.triggerWiggle()
-                        onOpenHarness()
+                        if model.bubblePresentation?.taskID != nil {
+                            model.openBubbleTask()
+                        } else {
+                            onOpenHarness()
+                        }
                     } else {
                         lastTapAt = now
                     }

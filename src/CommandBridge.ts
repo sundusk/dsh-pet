@@ -23,6 +23,11 @@ export interface CreateSessionCommand {
   sessionId: string
 }
 
+export interface OpenSessionCommand {
+  workspaceId: string
+  sessionId: string
+}
+
 export interface PromptCommand {
   workspaceId: string
   sessionId: string
@@ -71,6 +76,7 @@ export interface CommandHandlers {
   listWorkspaces: () => Promise<readonly DshPetWorkspace[]>
   listTasks: () => Promise<readonly DshPetTask[]>
   createSession: (request: CreateSessionCommand) => Promise<{ sessionId: string }>
+  openSession: (request: OpenSessionCommand) => Promise<{ accepted: true; sessionId: string }>
   prompt: (request: PromptCommand) => Promise<{ accepted: true; sessionId: string }>
   snapshotFor: (sessionId: string) => MoodBridgePayload | undefined
 }
@@ -332,7 +338,7 @@ export class CommandBridge {
           statusSubscription: true,
           supports: [
             'workspaces', 'tasks', 'subscribeTasks', 'unsubscribeTasks',
-            'createSession', 'prompt', 'imageAttachments', 'subscribe', 'unsubscribe',
+            'createSession', 'openSession', 'prompt', 'imageAttachments', 'subscribe', 'unsubscribe',
           ],
           attachmentLimits: this.handlers.imageAttachmentLimits,
           maxCommandBytes: this.maxCommandBytes,
@@ -362,6 +368,13 @@ export class CommandBridge {
         const workspaceId = stringField(request.workspaceId, 'workspaceId')
         const sessionId = stringField(request.sessionId, 'sessionId')
         const result = await this.handlers.createSession({ workspaceId, sessionId })
+        this.respond(client.socket, id, result)
+        return
+      }
+      if (action === 'openSession') {
+        const workspaceId = stringField(request.workspaceId, 'workspaceId')
+        const sessionId = stringField(request.sessionId, 'sessionId')
+        const result = await this.handlers.openSession({ workspaceId, sessionId })
         this.respond(client.socket, id, result)
         return
       }

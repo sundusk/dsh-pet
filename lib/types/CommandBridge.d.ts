@@ -16,6 +16,10 @@ export interface CreateSessionCommand {
     workspaceId: string;
     sessionId: string;
 }
+export interface OpenSessionCommand {
+    workspaceId: string;
+    sessionId: string;
+}
 export interface PromptCommand {
     workspaceId: string;
     sessionId: string;
@@ -60,6 +64,10 @@ export interface CommandHandlers {
     listWorkspaces: () => Promise<readonly DshPetWorkspace[]>;
     listTasks: () => Promise<readonly DshPetTask[]>;
     createSession: (request: CreateSessionCommand) => Promise<{
+        sessionId: string;
+    }>;
+    openSession: (request: OpenSessionCommand) => Promise<{
+        accepted: true;
         sessionId: string;
     }>;
     prompt: (request: PromptCommand) => Promise<{
