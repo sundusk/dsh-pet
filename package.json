@@ -1,7 +1,7 @@
 {
   "name": "@sundusk/dsh-pet",
   "description": "DeepSeek Harness Agent status bridge for the DSH Pet macOS desktop pets: a host-only status/command transport plus a small browser half that opens the Session selected in the pet.",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "type": "module",
   "repository": {
     "type": "git",

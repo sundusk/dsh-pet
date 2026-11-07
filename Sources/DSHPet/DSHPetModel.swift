@@ -173,6 +173,7 @@ final class DSHPetModel: ObservableObject {
     }
 
     func collapseComposer() {
+        commandClient.dismissCandidates()
         barPhase = .resting
     }
 
@@ -398,6 +399,10 @@ final class DSHPetModel: ObservableObject {
     func openBubbleTask() {
         guard let taskID = bubblePresentation?.taskID,
               let task = commandClient.tasks.first(where: { $0.id == taskID }) else { return }
+        openTask(task)
+    }
+
+    func openTask(_ task: DSHPetTaskSummary) {
         // Bring the exact selected Harness instance forward before its client
         // half selects the Session.
         harnessConnections.open(

@@ -46,6 +46,7 @@ async function waitForManifest(directory) {
 function nextJsonLine(socket) {
   let buffer = ''
   const waiters = []
+  const pending = []
   socket.setEncoding('utf8')
   socket.on('data', chunk => {
     buffer += chunk
@@ -54,10 +55,15 @@ function nextJsonLine(socket) {
       if (newline < 0) return
       const line = buffer.slice(0, newline)
       buffer = buffer.slice(newline + 1)
-      if (line.trim() !== '') waiters.shift()?.(JSON.parse(line))
+      if (line.trim() !== '') {
+        const value = JSON.parse(line)
+        const waiter = waiters.shift()
+        if (waiter === undefined) pending.push(value)
+        else waiter(value)
+      }
     }
   })
-  return () => new Promise(resolve => waiters.push(resolve))
+  return () => pending.length > 0 ? Promise.resolve(pending.shift()) : new Promise(resolve => waiters.push(resolve))
 }
 
 async function command(socket, nextLine, id, action, fields = {}) {
@@ -85,6 +91,27 @@ test('plugin adapter calls official-style workspace and session services', async
   const cleanups = []
   const calls = []
   let sessionRunning = false
+  let listFails = false
+  let projection = { kind: 'sequenced', values: { turnOutline: [{ response: 'Earlier' }, { response: 'Latest' }] } }
+  let projectionChanged
+  const agent = { id: 'dsh-pet-session-test' }
+  const services = {
+    sessionFileReferences: { list: async (actualAgent, query) => {
+      assert.equal(actualAgent, agent)
+      return [{ path: `${query} file`, kind: 'file' }, { path: 'folder', kind: 'directory' }]
+    } },
+    sessionSkillCatalog: { list: async () => ({ skills: [
+      { name: 'review', description: 'Review' }, { name: 'help', description: 'Help' },
+    ] }) },
+    commands: { list: actualAgent => {
+      assert.equal(actualAgent, agent)
+      return [{ name: 'help' }]
+    } },
+    sessionProjections: { onChanged: listener => {
+      projectionChanged = listener
+      return () => { projectionChanged = undefined }
+    } },
+  }
   const workspace = {
     id: 'workspace-test',
     title: 'Test workspace',
@@ -108,11 +135,15 @@ test('plugin adapter calls official-style workspace and session services', async
       get: id => String(id) === workspace.id ? workspace : undefined,
     },
     sessionController: {
+      resolveAgent: async () => ({ agent }),
+      projections: async () => projection,
       create: async request => {
         workspace.sessionIds.push(request.sessionId)
         return { sessionId: request.sessionId }
       },
-      list: async () => ({ items: workspace.sessionIds.map(sessionId => ({
+      list: async () => {
+        if (listFails) throw new Error('list unavailable')
+        return { items: workspace.sessionIds.map(sessionId => ({
         sessionId,
         updatedAt: 100,
         running: sessionRunning,
@@ -126,12 +157,14 @@ test('plugin adapter calls official-style workspace and session services', async
         parentSessionId: workspace.sessionIds[0],
         origin: 'subagent',
         cwd: root,
-      }] : []) }),
+      }] : []) }
+      },
       prompt: async request => {
         calls.push(request)
         return { accepted: true }
       },
     },
+    get: name => services[name],
     on: (event, handler) => {
       if (event === 'session/event') eventHandler = handler
     },
@@ -169,17 +202,61 @@ test('plugin adapter calls official-style workspace and session services', async
     })
     assert.equal(created.sessionId, 'dsh-pet-session-test')
 
+    const capabilities = await command(socket, nextLine, 'cap', 'capabilities')
+    for (const capability of ['fileCandidates', 'skillCandidates', 'taskPreview']) {
+      assert.ok(capabilities.supports.includes(capability))
+    }
+    const fields = { workspaceId: workspace.id, sessionId: 'dsh-pet-session-test' }
+    const files = await command(socket, nextLine, 'files', 'fileCandidates', { ...fields, query: 'test' })
+    assert.deepEqual(files.candidates, [{ path: 'test file', kind: 'file' }, { path: 'folder', kind: 'directory' }])
+    const skills = await command(socket, nextLine, 'skills', 'skillCandidates', fields)
+    assert.deepEqual(skills.skills.map(skill => [skill.name, skill.conflict]), [['review', false], ['help', true]])
+    const preview = await command(socket, nextLine, 'preview', 'taskPreview', fields)
+    assert.equal(preview.text, 'Latest')
+    projection = { kind: 'sequenced', values: { turnOutline: [{ response: 'Earlier' }, { response: '' }] } }
+    assert.equal((await command(socket, nextLine, 'empty-preview', 'taskPreview', fields)).status, 'empty')
+    projection = { kind: 'migration-required', values: { turnOutline: [{ response: 'stale' }] } }
+    assert.equal((await command(socket, nextLine, 'migration-preview', 'taskPreview', fields)).status, 'migration-required')
+    projection = { values: {} }
+    assert.equal((await command(socket, nextLine, 'unsupported-preview', 'taskPreview', fields)).status, 'unsupported')
+    assert.equal((await command(socket, nextLine, 'wrong-workspace', 'fileCandidates', { ...fields, workspaceId: 'other' })).ok, false)
+
+    sessionRunning = true
+
     const subscribed = await command(socket, nextLine, 'subscribe', 'subscribe', {
       sessionId: 'dsh-pet-session-test',
     })
     assert.equal(subscribed.snapshot.workspaceId, workspace.id)
-    assert.equal(subscribed.snapshot.mood, 'idle')
+    assert.equal(subscribed.snapshot.mood, 'waiting')
+    assert.equal(subscribed.snapshot.taskRunning, true)
+    listFails = true
+    const uncertain = await command(socket, nextLine, 'subscribe-uncertain', 'subscribe', {
+      sessionId: 'dsh-pet-session-test',
+    })
+    assert.equal(uncertain.snapshot.taskRunning, true)
+    assert.match(uncertain.snapshot.message, /无法确认/)
+    eventHandler({ id: 'dsh-pet-session-test' }, { type: 'activity/status', data: { phase: 'idle' } })
+    const stillUncertain = await nextLine()
+    assert.equal(stillUncertain.snapshot.taskRunning, true)
+    assert.match(stillUncertain.snapshot.message, /无法确认/)
+    listFails = false
+    const restoredStatus = await command(socket, nextLine, 'refresh', 'tasks')
+    assert.equal(restoredStatus.event, 'status')
+    assert.equal(restoredStatus.snapshot.taskRunning, true)
+    const refreshResponse = await nextLine()
+    assert.equal(refreshResponse.id, 'refresh')
+    sessionRunning = false
 
-    const taskSubscription = await command(socket, nextLine, 'tasks', 'subscribeTasks')
+    const initialTaskEvent = await command(socket, nextLine, 'tasks', 'subscribeTasks')
+    assert.equal(initialTaskEvent.event, 'tasks')
+    const taskSubscription = await nextLine()
     assert.deepEqual(taskSubscription.tasks.map(task => task.sessionId), ['dsh-pet-session-test'])
     assert.equal(taskSubscription.tasks[0].sessionId, 'dsh-pet-session-test')
     assert.equal(taskSubscription.tasks[0].workspaceId, workspace.id)
     assert.equal(taskSubscription.tasks[0].state, 'idle')
+
+    projectionChanged({ id: 'dsh-pet-session-test' }, 'turnOutline')
+    assert.deepEqual(await nextLine(), { event: 'taskPreviewChanged', sessionId: 'dsh-pet-session-test' })
 
     const prompted = await command(socket, nextLine, 'prompt', 'prompt', {
       workspaceId: workspace.id,
@@ -258,6 +335,15 @@ test('plugin adapter calls official-style workspace and session services', async
     const opened = await openResponse
     assert.equal(opened.accepted, true)
     assert.equal(opened.sessionId, 'dsh-pet-session-test')
+
+    eventHandler({ id: fields.sessionId }, { type: 'approval/asked' })
+    eventHandler({ id: fields.sessionId }, { type: 'approval/decided', data: { outcome: 'allowed-once' } })
+    statusRoute.handler({ method: 'GET' }, { writeHead() {}, end: body => { routeBody = JSON.parse(body) } })
+    assert.equal(routeBody.mood, 'waiting')
+    eventHandler({ id: fields.sessionId }, { type: 'approval/asked' })
+    eventHandler({ id: fields.sessionId }, { type: 'approval/decided', data: { outcome: 'rejected' } })
+    statusRoute.handler({ method: 'GET' }, { writeHead() {}, end: body => { routeBody = JSON.parse(body) } })
+    assert.equal(routeBody.mood, 'failed')
     socket.destroy()
   } finally {
     for (const cleanup of cleanups.reverse()) cleanup()

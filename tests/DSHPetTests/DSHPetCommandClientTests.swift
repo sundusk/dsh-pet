@@ -5,6 +5,48 @@ final class DSHPetCommandClientTests: XCTestCase {
     private let workspaceID = "workspace"
 
     @MainActor
+    func testFileCandidatesUseHarnessReferenceGrammar() throws {
+        let candidates = try DSHPetCommandClient.decodeCandidates(["candidates": [
+            ["path": "Sources/main.swift", "kind": "file"],
+            ["path": "我的 目录", "kind": "directory"],
+            ["path": "bad\"name", "kind": "file"],
+        ]], kind: .file, query: "")
+        XCTAssertEqual(candidates.map(\.insertText), ["@Sources/main.swift", "@\"我的 目录/\"", "@bad\"name"])
+        XCTAssertNil(candidates[0].disabledReason)
+        XCTAssertNil(candidates[1].disabledReason)
+        XCTAssertNotNil(candidates[2].disabledReason)
+    }
+
+    @MainActor
+    func testSkillCandidatesFilterAndRejectUnknownOrConflictingCommands() throws {
+        let candidates = try DSHPetCommandClient.decodeCandidates(["skills": [
+            ["name": "review", "description": "Review", "conflict": false],
+            ["name": "review-code", "description": "Conflict", "conflict": true],
+            ["name": "review-unknown", "description": "Unknown"],
+            ["name": "other", "description": "Other", "conflict": false],
+        ]], kind: .skill, query: "review")
+        XCTAssertEqual(candidates.map(\.insertText), ["/review ", "/review-code ", "/review-unknown "])
+        XCTAssertNil(candidates[0].disabledReason)
+        XCTAssertNotNil(candidates[1].disabledReason)
+        XCTAssertNotNil(candidates[2].disabledReason)
+    }
+
+    @MainActor
+    func testSelectedSkillSurvivesDraftRestoreAndClearsWhenRemoved() {
+        let suite = "DSHPetCommandClientTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let client = DSHPetCommandClient(defaults: defaults, socketPath: "/tmp/unused.sock")
+        client.draft = "/review 请检查"
+        client.selectedSkillPrefix = "/review "
+        let restored = DSHPetCommandClient(defaults: defaults, socketPath: "/tmp/unused.sock")
+        XCTAssertEqual(restored.selectedSkillPrefix, "/review ")
+        restored.draft = "请检查"
+        XCTAssertNil(restored.selectedSkillPrefix)
+        XCTAssertNil(defaults.string(forKey: "dsh-pet.command.selectedSkillPrefix"))
+    }
+
+    @MainActor
     func testViewingCompletedTaskDoesNotDrivePetSnapshot() {
         let suiteName = "DSHPetCommandClientTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

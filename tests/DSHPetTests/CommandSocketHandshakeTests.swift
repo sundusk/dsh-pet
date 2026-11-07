@@ -5,6 +5,90 @@ import XCTest
 
 final class CommandSocketHandshakeTests: XCTestCase {
     @MainActor
+    func testPreviewUpdatesOnlyForFocusedSession() async throws {
+        let path = "/tmp/dsh-pet-command-\(UUID().uuidString.prefix(8)).sock"
+        let instance = makeInstance(id: "selected", status: "/tmp/selected-status.sock", command: path)
+        let server = try CommandSocketServer(path: path, instance: instance, previewSupport: true)
+        defer { server.stop() }
+        let suite = "CommandSocketHandshakeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
+        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        client.start()
+        await server.waitForAction("workspaces")
+        let task = DSHPetTaskSummary(sessionID: "focused", workspaceID: "workspace", title: "测试", cwd: nil,
+            updatedAt: 1, running: false, blank: false, state: .completed, mood: "done", taskRunning: false,
+            waitingForUser: false, failed: false, completed: true, tool: nil, message: nil)
+        client.applyTaskSummaries([task])
+        client.focusTask(task.id)
+        await server.waitForAction("taskPreview")
+        server.sendEvent(["event": "taskPreviewChanged", "sessionId": "other"])
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(server.actionCount("taskPreview"), 1)
+        server.sendEvent(["event": "taskPreviewChanged", "sessionId": "focused"])
+        await server.waitForActionCount("taskPreview", atLeast: 2)
+        XCTAssertEqual(server.actionCount("taskPreview"), 2)
+        client.stop()
+    }
+
+    @MainActor
+    func testCandidateQueriesSharePendingSessionAndIgnoreOldQuery() async throws {
+        let path = "/tmp/dsh-pet-command-\(UUID().uuidString.prefix(8)).sock"
+        let instance = makeInstance(id: "selected", status: "/tmp/selected-status.sock", command: path)
+        let server = try CommandSocketServer(path: path, instance: instance, delayCreateSession: true, candidateSupport: true)
+        defer { server.stop() }
+        let suite = "CommandSocketHandshakeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
+        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        client.start()
+        await server.waitForAction("workspaces")
+        for _ in 0..<100 where client.selectedWorkspaceID == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        client.updateCandidates(kind: .file, query: "old")
+        await server.waitForAction("createSession")
+        client.updateCandidates(kind: .file, query: "new")
+        server.releaseCreateSession()
+        await server.waitForAction("fileCandidates")
+        for _ in 0..<100 where client.candidatesLoading {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(server.actionCount("createSession"), 1)
+        XCTAssertEqual(client.candidates.map(\.insertText), ["@new"])
+        client.stop()
+    }
+
+    @MainActor
+    func testNewSessionInvalidatesPendingCandidateSessionCreation() async throws {
+        let path = "/tmp/dsh-pet-command-\(UUID().uuidString.prefix(8)).sock"
+        let instance = makeInstance(id: "selected", status: "/tmp/selected-status.sock", command: path)
+        let server = try CommandSocketServer(path: path, instance: instance, delayCreateSession: true, candidateSupport: true)
+        defer { server.stop() }
+        let suite = "CommandSocketHandshakeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
+        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        client.start()
+        await server.waitForAction("workspaces")
+        for _ in 0..<100 where client.selectedWorkspaceID == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        client.updateCandidates(kind: .file, query: "old")
+        await server.waitForAction("createSession")
+        client.startNewSession()
+        server.releaseCreateSession()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertNil(client.sessionID)
+        XCTAssertFalse(server.containsAction("subscribe"))
+        XCTAssertFalse(server.containsAction("fileCandidates"))
+        XCTAssertNil(client.candidateKind)
+        client.stop()
+    }
+    @MainActor
     func testMismatchedCapabilitiesNeverUnlockBusinessRequests() async throws {
         let path = "/tmp/dsh-pet-command-\(UUID().uuidString.prefix(8)).sock"
         let instance = makeInstance(id: "selected", status: "/tmp/selected-status.sock", command: path)
@@ -130,15 +214,19 @@ private final class CommandSocketServer: @unchecked Sendable {
     private let path: String
     private let instance: HarnessInstance
     private let delayCreateSession: Bool
+    private let candidateSupport: Bool
+    private let previewSupport: Bool
     private let createSessionRelease = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var clients: [Int32] = []
     private(set) var actions: [String] = []
 
-    init(path: String, instance: HarnessInstance, delayCreateSession: Bool = false) throws {
+    init(path: String, instance: HarnessInstance, delayCreateSession: Bool = false, candidateSupport: Bool = false, previewSupport: Bool = false) throws {
         self.path = path
         self.instance = instance
         self.delayCreateSession = delayCreateSession
+        self.candidateSupport = candidateSupport
+        self.previewSupport = previewSupport
         listener = try Self.makeListener(path: path)
         DispatchQueue.global().async { [weak self] in self?.acceptLoop() }
     }
@@ -154,6 +242,10 @@ private final class CommandSocketServer: @unchecked Sendable {
         lock.withLock { actions.contains(action) }
     }
 
+    func actionCount(_ action: String) -> Int {
+        lock.withLock { actions.filter { $0 == action }.count }
+    }
+
     func waitForActionCount(_ action: String, atLeast count: Int) async {
         for _ in 0..<100 {
             if lock.withLock({ actions.filter { $0 == action }.count >= count }) { return }
@@ -163,6 +255,16 @@ private final class CommandSocketServer: @unchecked Sendable {
 
     func releaseCreateSession() {
         createSessionRelease.signal()
+    }
+
+    func sendEvent(_ event: [String: Any]) {
+        guard var data = try? JSONSerialization.data(withJSONObject: event) else { return }
+        data.append(10)
+        lock.withLock {
+            for client in clients {
+                _ = data.withUnsafeBytes { Darwin.write(client, $0.baseAddress, $0.count) }
+            }
+        }
     }
 
     func stop() {
@@ -203,7 +305,8 @@ private final class CommandSocketServer: @unchecked Sendable {
                 if action == "capabilities" {
                     response = [
                         "id": id, "ok": true, "protocolVersion": 1,
-                        "commandSocket": true, "supports": ["workspaces"],
+                        "commandSocket": true, "supports": ["workspaces"]
+                            + (candidateSupport ? ["fileCandidates"] : []) + (previewSupport ? ["taskPreview"] : []),
                         "instance": [
                             "protocolVersion": instance.protocolVersion,
                             "instanceId": instance.instanceId,
@@ -227,7 +330,15 @@ private final class CommandSocketServer: @unchecked Sendable {
                     if action == "createSession", delayCreateSession {
                         createSessionRelease.wait()
                     }
-                    response = ["id": id, "ok": true]
+                    if action == "createSession" {
+                        response = ["id": id, "ok": true, "sessionId": request["sessionId"] ?? ""]
+                    } else if action == "fileCandidates" {
+                        response = ["id": id, "ok": true, "candidates": [["path": request["query"] ?? "", "kind": "file"]]]
+                    } else if action == "taskPreview" {
+                        response = ["id": id, "ok": true, "status": "available", "text": "测试回复"]
+                    } else {
+                        response = ["id": id, "ok": true]
+                    }
                 }
                 guard var data = try? JSONSerialization.data(withJSONObject: response) else { continue }
                 data.append(10)

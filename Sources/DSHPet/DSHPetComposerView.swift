@@ -200,6 +200,8 @@ struct DSHPetComposerView: View {
                     }
                     DSHPetTextView(
                         text: $command.draft,
+                        command: command,
+                        selectedSkillPrefix: $command.selectedSkillPrefix,
                         measuredHeight: Binding(
                             get: { model.composerInputHeight },
                             set: { model.setComposerInputHeight($0) }
@@ -258,7 +260,7 @@ struct DSHPetComposerView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-            } else if let label = command.submissionStatus.label ?? command.lastError {
+            } else if let label = command.submissionStatus.label ?? command.lastError ?? command.busyMessage {
                 Text(label)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(command.submissionStatus == .submitted ? .green : .secondary)
@@ -286,6 +288,8 @@ struct DSHPetComposerView: View {
 /// composed Chinese candidate first, while Shift+Enter remains a newline.
 struct DSHPetTextView: NSViewRepresentable {
     @Binding var text: String
+    @ObservedObject var command: DSHPetCommandClient
+    @Binding var selectedSkillPrefix: String?
     @Binding var measuredHeight: CGFloat
     let onSubmit: () -> Void
     let onEscape: () -> Void
@@ -330,6 +334,7 @@ struct DSHPetTextView: NSViewRepresentable {
         guard let textView = scroll.documentView as? NSTextView else { return }
         if textView.string != text { textView.string = text }
         context.coordinator.parent = self
+        context.coordinator.updatePopover(textView)
         DispatchQueue.main.async {
             context.coordinator.updateMeasuredHeight(textView)
         }
@@ -341,9 +346,13 @@ struct DSHPetTextView: NSViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: DSHPetTextView
         var lastFocusRequest: Int?
+        private var activeToken: DSHPetInputToken?
+        private var dismissedToken: DSHPetInputToken?
+        private var selectedIndex = 0
+        private let popover = NSPopover()
 
         init(_ parent: DSHPetTextView) { self.parent = parent }
 
@@ -351,6 +360,85 @@ struct DSHPetTextView: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
             updateMeasuredHeight(textView)
+            updateToken(textView)
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            updateToken(textView)
+        }
+
+        private func updateToken(_ textView: NSTextView) {
+            guard !textView.hasMarkedText() else { return }
+            let token = DSHPetInputToken.find(in: textView.string, selection: textView.selectedRange())
+            guard token != activeToken else { return }
+            activeToken = token
+            selectedIndex = 0
+            guard let token else {
+                dismissedToken = nil
+                parent.command.dismissCandidates()
+                return
+            }
+            guard token != dismissedToken else {
+                parent.command.dismissCandidates()
+                return
+            }
+            dismissedToken = nil
+            parent.command.updateCandidates(kind: token.kind, query: token.query)
+        }
+
+        func updatePopover(_ textView: NSTextView) {
+            guard parent.command.candidateKind != nil, activeToken != nil,
+                  textView.window != nil else {
+                popover.close()
+                if parent.command.candidateKind == nil { activeToken = nil }
+                return
+            }
+            let candidates = parent.command.candidates
+            if selectedIndex >= candidates.count { selectedIndex = max(0, candidates.count - 1) }
+            let content = DSHPetCandidateList(
+                candidates: candidates,
+                selectedIndex: selectedIndex,
+                loading: parent.command.candidatesLoading,
+                error: parent.command.candidatesError,
+                select: { [weak self, weak textView] index in
+                    guard let self, let textView else { return }
+                    self.selectCandidate(at: index, in: textView)
+                }
+            )
+            if let hosting = popover.contentViewController as? NSHostingController<DSHPetCandidateList> {
+                hosting.rootView = content
+            } else {
+                popover.contentViewController = NSHostingController(rootView: content)
+                popover.behavior = .applicationDefined
+            }
+            if !popover.isShown {
+                popover.show(relativeTo: textView.bounds, of: textView, preferredEdge: .maxY)
+            }
+        }
+
+        private func dismiss() {
+            dismissedToken = activeToken
+            parent.command.dismissCandidates()
+            popover.close()
+        }
+
+        private func selectCandidate(at index: Int, in textView: NSTextView) {
+            guard let token = activeToken,
+                  parent.command.candidates.indices.contains(index),
+                  DSHPetInputToken.find(in: textView.string, selection: textView.selectedRange()) == token else { return }
+            let candidate = parent.command.candidates[index]
+            guard candidate.disabledReason == nil else { return }
+            let edit = DSHPetInputEdit.apply(to: textView.string, token: token, insertion: candidate.insertText,
+                                              previousSkill: parent.selectedSkillPrefix)
+            textView.insertText(edit.text, replacementRange: NSRange(location: 0, length: (textView.string as NSString).length))
+            textView.setSelectedRange(NSRange(location: edit.cursor, length: 0))
+            if token.kind == .skill { parent.selectedSkillPrefix = candidate.insertText }
+            parent.text = textView.string
+            activeToken = nil
+            parent.command.dismissCandidates()
+            popover.close()
+            textView.window?.makeFirstResponder(textView)
         }
 
         func updateMeasuredHeight(_ textView: NSTextView) {
@@ -367,9 +455,35 @@ struct DSHPetTextView: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if textView.hasMarkedText() { return false }
+            if parent.command.candidateKind != nil {
+                if commandSelector == #selector(NSResponder.moveDown(_:)) {
+                    selectedIndex = min(selectedIndex + 1, max(0, parent.command.candidates.count - 1))
+                    updatePopover(textView)
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.moveUp(_:)) {
+                    selectedIndex = max(0, selectedIndex - 1)
+                    updatePopover(textView)
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                    dismiss()
+                    return true
+                }
+                if (commandSelector == #selector(NSResponder.insertNewline(_:))
+                    || commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)))
+                    && !NSEvent.modifierFlags.contains(.shift) {
+                    if parent.command.candidates.indices.contains(selectedIndex),
+                       parent.command.candidates[selectedIndex].disabledReason == nil {
+                        selectCandidate(at: selectedIndex, in: textView)
+                        return true
+                    }
+                    dismiss()
+                }
+            }
             if commandSelector == #selector(NSResponder.insertNewline(_:))
                 || commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
-                if textView.hasMarkedText() { return false }
                 if NSEvent.modifierFlags.contains(.shift) { return false }
                 parent.onSubmit()
                 return true
@@ -380,5 +494,100 @@ struct DSHPetTextView: NSViewRepresentable {
             }
             return false
         }
+    }
+}
+
+struct DSHPetInputEdit {
+    let text: String
+    let cursor: Int
+
+    static func apply(to text: String, token: DSHPetInputToken, insertion: String, previousSkill: String?) -> DSHPetInputEdit {
+        let result = NSMutableString(string: text)
+        if token.kind == .file {
+            let ending = token.range.location + token.range.length
+            let remainder = result.substring(from: ending)
+            let needsSpace = remainder.first?.isWhitespace != true
+            let replacement = insertion + (needsSpace ? " " : "")
+            result.replaceCharacters(in: token.range, with: replacement)
+            return DSHPetInputEdit(text: result as String, cursor: token.range.location + (replacement as NSString).length)
+        }
+        result.replaceCharacters(in: token.range, with: "")
+        var cursor = token.range.location
+        if let previousSkill, text.hasPrefix(previousSkill),
+           (previousSkill as NSString).length <= token.range.location {
+            let length = (previousSkill as NSString).length
+            result.deleteCharacters(in: NSRange(location: 0, length: length))
+            cursor -= length
+        }
+        result.insert(insertion, at: 0)
+        return DSHPetInputEdit(text: result as String, cursor: cursor + (insertion as NSString).length)
+    }
+}
+
+struct DSHPetInputToken: Equatable {
+    let kind: DSHPetCandidateKind
+    let query: String
+    let range: NSRange
+
+    static func find(in text: String, selection: NSRange) -> DSHPetInputToken? {
+        let source = text as NSString
+        guard selection.length == 0, selection.location <= source.length else { return nil }
+        let prefix = source.substring(to: selection.location) as NSString
+        let patterns = [#"(?:^|\s)(@\"([^\"]*))$"#, #"(?:^|\s)(@([^\s\"]*))$"#, #"(?:^|\s)(\$([^\s]*))$"#]
+        for (index, pattern) in patterns.enumerated() {
+            guard let expression = try? NSRegularExpression(pattern: pattern),
+                  let match = expression.firstMatch(in: prefix as String, range: NSRange(location: 0, length: prefix.length)) else { continue }
+            return DSHPetInputToken(kind: index == 2 ? .skill : .file, query: prefix.substring(with: match.range(at: 2)), range: match.range(at: 1))
+        }
+        return nil
+    }
+}
+
+private struct DSHPetCandidateList: View {
+    let candidates: [DSHPetInputCandidate]
+    let selectedIndex: Int
+    let loading: Bool
+    let error: String?
+    let select: (Int) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if loading {
+                Text("正在加载…").foregroundStyle(.secondary)
+            } else if let error {
+                Text(error).foregroundStyle(.secondary)
+            } else if candidates.isEmpty {
+                Text("没有匹配结果").foregroundStyle(.secondary)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
+                                Button { select(index) } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(candidate.label).lineLimit(1)
+                                        if let detail = candidate.disabledReason ?? candidate.detail, !detail.isEmpty {
+                                            Text(detail).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(5)
+                                    .background(index == selectedIndex ? Color.accentColor.opacity(0.2) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(candidate.disabledReason != nil)
+                                .id(candidate.id)
+                            }
+                        }
+                    }
+                    .onChange(of: selectedIndex) { _, index in
+                        if candidates.indices.contains(index) { proxy.scrollTo(candidates[index].id) }
+                    }
+                }
+            }
+        }
+        .font(.system(size: 11))
+        .padding(8)
+        .frame(width: 300, height: 150, alignment: .topLeading)
     }
 }

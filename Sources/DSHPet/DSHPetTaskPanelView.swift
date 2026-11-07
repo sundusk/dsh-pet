@@ -248,10 +248,28 @@ struct DSHPetTaskPanelView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text("最后一轮回复")
+                    .font(.system(size: 10, weight: .medium))
+                Text(command.taskPreview ?? command.taskPreviewStatus ?? "暂无回复预览")
+                    .font(.system(size: 11))
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+            }
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             if let warning = command.continuationWarning {
                 Text(warning)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.orange)
+            }
+
+            if let error = command.taskOpenError {
+                Text(error)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
             }
 
             Spacer()
@@ -263,6 +281,10 @@ struct DSHPetTaskPanelView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+
+                Button("打开此会话") { model.openTask(task) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
 
                 Button {
                     NSPasteboard.general.clearContents()

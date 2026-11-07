@@ -10,6 +10,18 @@ enum DSHPetCommandConnection: Equatable {
     case connected
 }
 
+enum DSHPetCandidateKind: Equatable {
+    case file, skill
+}
+
+struct DSHPetInputCandidate: Equatable, Identifiable {
+    let id: String
+    let label: String
+    let insertText: String
+    let detail: String?
+    let disabledReason: String?
+}
+
 struct DSHPetWorkspace: Codable, Equatable, Identifiable {
     let id: String
     let title: String
@@ -89,9 +101,25 @@ final class DSHPetCommandClient: ObservableObject {
     @Published private(set) var submissionStatus: DSHPetSubmissionStatus = .idle
     @Published private(set) var lastError: String?
     @Published private(set) var continuationWarning: String?
+    @Published private(set) var candidateKind: DSHPetCandidateKind?
+    @Published private(set) var candidates: [DSHPetInputCandidate] = []
+    @Published private(set) var candidatesLoading = false
+    @Published private(set) var candidatesError: String?
+    @Published private(set) var taskPreview: String?
+    @Published private(set) var taskPreviewStatus: String?
+    @Published private(set) var taskOpenError: String?
     @Published private(set) var draftImages: [DSHPetDraftImage] = []
+    @Published var selectedSkillPrefix: String? {
+        didSet {
+            if let selectedSkillPrefix { defaults.set(selectedSkillPrefix, forKey: Keys.selectedSkillPrefix) }
+            else { defaults.removeObject(forKey: Keys.selectedSkillPrefix) }
+        }
+    }
     @Published var draft: String {
-        didSet { defaults.set(draft, forKey: Keys.draft) }
+        didSet {
+            defaults.set(draft, forKey: Keys.draft)
+            if let selectedSkillPrefix, !draft.hasPrefix(selectedSkillPrefix) { self.selectedSkillPrefix = nil }
+        }
     }
 
     var onAccepted: (() -> Void)?
@@ -102,12 +130,14 @@ final class DSHPetCommandClient: ObservableObject {
             || workspaces.isEmpty
             || submissionStatus.label != nil
             || lastError != nil
+            || busyMessage != nil
     }
 
     private enum Keys {
         static let workspaceID = "dsh-pet.command.workspaceID"
         static let sessionID = "dsh-pet.command.sessionID"
         static let draft = "dsh-pet.command.draft"
+        static let selectedSkillPrefix = "dsh-pet.command.selectedSkillPrefix"
         static let requestID = "dsh-pet.command.pendingRequestID"
         static let requestText = "dsh-pet.command.pendingRequestText"
         static let taskReadMarkers = "dsh-pet.command.taskReadMarkers"
@@ -147,6 +177,16 @@ final class DSHPetCommandClient: ObservableObject {
     private var reconnectTask: Task<Void, Never>?
     private var connectionGeneration = 0
     private var capabilitiesValidated = false
+    private var fileCandidatesAvailable = false
+    private var skillCandidatesAvailable = false
+    private var taskPreviewAvailable = false
+    private var candidateGeneration = 0
+    private var candidateTask: Task<Void, Never>?
+    private var previewGeneration = 0
+    private var previewTask: Task<Void, Never>?
+    private var taskOpenGeneration = 0
+    private var sessionBindingGeneration = 0
+    private var sessionCreationTask: Task<String, Error>?
     private var readMarkers: [String: TaskReadMarker] = [:]
     private var hasReceivedTaskBaseline = false
     private var presentedActiveTaskIDs: Set<String>?
@@ -168,7 +208,10 @@ final class DSHPetCommandClient: ObservableObject {
         persistedTargetBindingKey = defaults.string(forKey: Keys.targetBindingKey)
         selectedWorkspaceID = defaults.string(forKey: Keys.workspaceID)
         sessionID = defaults.string(forKey: Keys.sessionID)
-        draft = defaults.string(forKey: Keys.draft) ?? ""
+        let restoredDraft = defaults.string(forKey: Keys.draft) ?? ""
+        draft = restoredDraft
+        let savedSkillPrefix = defaults.string(forKey: Keys.selectedSkillPrefix)
+        selectedSkillPrefix = savedSkillPrefix.flatMap { restoredDraft.hasPrefix($0) ? $0 : nil }
         pendingRequestID = defaults.string(forKey: Keys.requestID)
         pendingRequestText = defaults.string(forKey: Keys.requestText)
         pendingRequestSignature = defaults.string(forKey: Keys.requestSignature)
@@ -283,6 +326,7 @@ final class DSHPetCommandClient: ObservableObject {
 
     var busyMessage: String? {
         guard let snapshot = sessionSnapshot, snapshot.taskRunning else { return nil }
+        if snapshot.message == "无法确认任务状态，暂不可发送" { return snapshot.message }
         if snapshot.waitingForUser { return "请在 Harness 中完成当前操作" }
         return "当前会话正在执行，请稍候"
     }
@@ -489,7 +533,7 @@ final class DSHPetCommandClient: ObservableObject {
             defaults.set(id, forKey: Keys.workspaceID)
             presentedActiveTaskIDs = nil
             clearSessionBinding()
-            focusedTaskID = nil
+            clearFocusedTask()
         }
     }
 
@@ -498,7 +542,7 @@ final class DSHPetCommandClient: ObservableObject {
     func startNewSession() {
         guard submissionStatus != .submitting else { return }
         clearSessionBinding()
-        focusedTaskID = nil
+        clearFocusedTask()
         submissionStatus = .idle
         lastError = nil
         continuationWarning = nil
@@ -506,9 +550,12 @@ final class DSHPetCommandClient: ObservableObject {
 
     func focusTask(_ id: String) {
         guard let task = tasks.first(where: { $0.id == id }) else { return }
+        if focusedTaskID != id { taskOpenGeneration &+= 1 }
         focusedTaskID = id
         markTaskRead(task)
         continuationWarning = nil
+        taskOpenError = nil
+        refreshTaskPreview(task, retryEmpty: !task.taskRunning)
     }
 
     /// Acknowledge a terminal result from its trailing status button. Unlike
@@ -519,14 +566,21 @@ final class DSHPetCommandClient: ObservableObject {
               DSHPetBubbleDeckBuilder.isTerminal(task) else { return }
         readMarkers[task.id] = TaskReadMarker(updatedAt: task.updatedAt, mood: task.mood)
         presentedActiveTaskIDs?.remove(task.id)
-        if focusedTaskID == task.id { focusedTaskID = nil }
+        if focusedTaskID == task.id { clearFocusedTask() }
         persistReadMarkers()
         rebuildBubbleDeck(now: now())
     }
 
     func clearFocusedTask() {
+        taskOpenGeneration &+= 1
         focusedTaskID = nil
         continuationWarning = nil
+        taskOpenError = nil
+        previewGeneration &+= 1
+        previewTask?.cancel()
+        previewTask = nil
+        taskPreview = nil
+        taskPreviewStatus = nil
     }
 
     /// Freeze the active-task panel's visible membership until it closes.
@@ -572,6 +626,10 @@ final class DSHPetCommandClient: ObservableObject {
         markTaskRead(task)
         if sessionID == task.sessionID { return true }
 
+        sessionBindingGeneration &+= 1
+        sessionCreationTask?.cancel()
+        sessionCreationTask = nil
+        dismissCandidates()
         sessionID = task.sessionID
         defaults.set(task.sessionID, forKey: Keys.sessionID)
         // Task summaries retain terminal results for card history. The pet must
@@ -586,13 +644,18 @@ final class DSHPetCommandClient: ObservableObject {
     /// membership check keeps a stale or forged task summary from selecting a
     /// Session outside the instance currently connected to DSH Pet.
     func openTaskSession(_ task: DSHPetTaskSummary) {
+        taskOpenGeneration &+= 1
+        let openGeneration = taskOpenGeneration
+        taskOpenError = nil
         guard connection == .connected, capabilitiesValidated else {
-            lastError = DSHPetCommandError.unavailable.errorDescription
+            taskOpenError = DSHPetCommandError.unavailable.errorDescription
+            lastError = taskOpenError
             return
         }
         guard let workspace = workspaces.first(where: { $0.id == task.workspaceID }),
               workspace.sessionIds.contains(task.sessionID) else {
-            lastError = "该任务已不属于当前 Harness 工作区"
+            taskOpenError = "该任务已不属于当前 Harness 工作区"
+            lastError = taskOpenError
             return
         }
         let generation = connectionGeneration
@@ -605,13 +668,154 @@ final class DSHPetCommandClient: ObservableObject {
                     timeout: 12,
                     expectedGeneration: generation
                 )
-                guard self.connectionGeneration == generation else { return }
+                guard self.connectionGeneration == generation, taskOpenGeneration == openGeneration else { return }
                 lastError = nil
-                focusedTaskID = task.id
-                markTaskRead(task)
+                taskOpenError = nil
+                focusTask(task.id)
             } catch {
-                guard self.connectionGeneration == generation else { return }
-                lastError = errorMessage(error)
+                guard self.connectionGeneration == generation, taskOpenGeneration == openGeneration else { return }
+                if case DSHPetCommandError.timedOut = error {
+                    taskOpenError = "打开会话超时，请确认 Harness 客户端已加载"
+                } else {
+                    taskOpenError = errorMessage(error)
+                }
+                lastError = taskOpenError
+            }
+        }
+    }
+
+    func updateCandidates(kind: DSHPetCandidateKind, query: String) {
+        candidateGeneration &+= 1
+        let generation = candidateGeneration
+        candidateTask?.cancel()
+        candidateKind = kind
+        candidates = []
+        candidatesError = nil
+        guard connection == .connected, capabilitiesValidated else {
+            candidatesLoading = false
+            candidatesError = "请先连接 Harness"
+            return
+        }
+        guard kind == .file ? fileCandidatesAvailable : skillCandidatesAvailable else {
+            candidatesLoading = false
+            candidatesError = "当前 Harness 不支持此功能"
+            return
+        }
+        guard let workspaceID = selectedWorkspaceID, hasWorkspace else {
+            candidatesLoading = false
+            candidatesError = "请先选择工作区"
+            return
+        }
+        let connectionGeneration = self.connectionGeneration
+        let bindingGeneration = sessionBindingGeneration
+        candidatesLoading = true
+        candidateTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let session = try await ensureSession(expectedGeneration: connectionGeneration)
+                guard !Task.isCancelled, candidateGeneration == generation,
+                      sessionBindingGeneration == bindingGeneration,
+                      selectedWorkspaceID == workspaceID, sessionID == session else { return }
+                var fields: [String: Any] = ["workspaceId": workspaceID, "sessionId": session]
+                if kind == .file { fields["query"] = query }
+                let response = try await request(
+                    action: kind == .file ? "fileCandidates" : "skillCandidates",
+                    fields: fields, timeout: 12, expectedGeneration: connectionGeneration
+                )
+                guard !Task.isCancelled, candidateGeneration == generation,
+                      sessionBindingGeneration == bindingGeneration,
+                      selectedWorkspaceID == workspaceID, sessionID == session else { return }
+                candidates = try Self.decodeCandidates(response, kind: kind, query: query)
+                candidatesLoading = false
+            } catch {
+                guard !Task.isCancelled, candidateGeneration == generation,
+                      self.connectionGeneration == connectionGeneration,
+                      sessionBindingGeneration == bindingGeneration else { return }
+                candidatesLoading = false
+                candidatesError = errorMessage(error)
+            }
+        }
+    }
+
+    func dismissCandidates() {
+        candidateGeneration &+= 1
+        candidateTask?.cancel()
+        candidateTask = nil
+        candidateKind = nil
+        candidates = []
+        candidatesLoading = false
+        candidatesError = nil
+    }
+
+    static func decodeCandidates(_ response: [String: Any], kind: DSHPetCandidateKind, query: String) throws -> [DSHPetInputCandidate] {
+        if kind == .file {
+            guard let rows = response["candidates"] as? [[String: Any]] else { throw DSHPetCommandError.malformed }
+            return rows.compactMap { row in
+                guard let path = row["path"] as? String,
+                      let type = row["kind"] as? String,
+                      type == "file" || type == "directory" else { return nil }
+                let fullPath = path + (type == "directory" && !path.hasSuffix("/") ? "/" : "")
+                let invalid = fullPath.unicodeScalars.contains {
+                    $0.value == 34 || $0.value < 32 || (0x7f...0x9f).contains($0.value)
+                }
+                let quoted = fullPath.unicodeScalars.contains { CharacterSet.whitespacesAndNewlines.contains($0) }
+                let insert = quoted ? "@\"\(fullPath)\"" : "@\(fullPath)"
+                return DSHPetInputCandidate(id: "\(type):\(path)", label: fullPath,
+                    insertText: insert, detail: type == "directory" ? "目录" : "文件",
+                    disabledReason: invalid ? "此路径无法用 Harness 引用格式表示" : nil)
+            }
+        }
+        guard let rows = response["skills"] as? [[String: Any]] else { throw DSHPetCommandError.malformed }
+        return rows.compactMap { row in
+            guard let name = row["name"] as? String,
+                  query.isEmpty || name.localizedCaseInsensitiveContains(query) else { return nil }
+            return DSHPetInputCandidate(id: name, label: name, insertText: "/\(name) ",
+                detail: row["description"] as? String,
+                disabledReason: row["conflict"] as? Bool == false ? nil : "无法确认是否与 Harness 命令同名")
+        }
+    }
+
+    private func refreshTaskPreview(_ task: DSHPetTaskSummary, retryEmpty: Bool = false) {
+        previewGeneration &+= 1
+        let generation = previewGeneration
+        previewTask?.cancel()
+        taskPreview = nil
+        guard taskPreviewAvailable else {
+            taskPreviewStatus = "当前 Harness 不支持回复预览"
+            return
+        }
+        taskPreviewStatus = "正在加载回复预览…"
+        let connectionGeneration = self.connectionGeneration
+        previewTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                for attempt in 0...(retryEmpty ? 2 : 0) {
+                    if attempt > 0 { try await Task.sleep(nanoseconds: 500_000_000) }
+                    let response = try await request(action: "taskPreview", fields: [
+                        "workspaceId": task.workspaceID, "sessionId": task.sessionID,
+                    ], timeout: 12, expectedGeneration: connectionGeneration)
+                    guard !Task.isCancelled, previewGeneration == generation,
+                          focusedTaskID == task.id, self.connectionGeneration == connectionGeneration else { return }
+                    guard let status = response["status"] as? String else { throw DSHPetCommandError.malformed }
+                    switch status {
+                    case "available":
+                        guard let text = response["text"] as? String, !text.isEmpty else { throw DSHPetCommandError.malformed }
+                        taskPreview = text
+                        taskPreviewStatus = nil
+                        return
+                    case "empty":
+                        taskPreviewStatus = "暂无回复预览"
+                        if attempt < (retryEmpty ? 2 : 0) { continue }
+                    case "unsupported": taskPreviewStatus = "当前 Harness 不支持回复预览"
+                    case "migration-required": taskPreviewStatus = "会话需要迁移，暂无法显示回复预览"
+                    default: throw DSHPetCommandError.malformed
+                    }
+                    return
+                }
+            } catch {
+                guard !Task.isCancelled, previewGeneration == generation,
+                      focusedTaskID == task.id, self.connectionGeneration == connectionGeneration else { return }
+                taskPreviewStatus = "回复预览加载失败：\(errorMessage(error))"
             }
         }
     }
@@ -728,6 +932,21 @@ final class DSHPetCommandClient: ObservableObject {
     private func ensureSession(expectedGeneration: Int) async throws -> String {
         guard connectionGeneration == expectedGeneration else { throw DSHPetCommandError.unavailable }
         let workspaceID = try requireWorkspaceID()
+        if let sessionCreationTask { return try await sessionCreationTask.value }
+        let bindingGeneration = sessionBindingGeneration
+        let creation = Task { @MainActor [weak self] in
+            guard let self else { throw DSHPetCommandError.unavailable }
+            return try await createBoundSession(workspaceID: workspaceID,
+                expectedGeneration: expectedGeneration, bindingGeneration: bindingGeneration)
+        }
+        sessionCreationTask = creation
+        defer {
+            if sessionBindingGeneration == bindingGeneration { sessionCreationTask = nil }
+        }
+        return try await creation.value
+    }
+
+    private func createBoundSession(workspaceID: String, expectedGeneration: Int, bindingGeneration: Int) async throws -> String {
         let session = sessionID ?? "dsh-pet-session-\(UUID().uuidString.lowercased())"
         let response = try await request(
             action: "createSession",
@@ -735,7 +954,8 @@ final class DSHPetCommandClient: ObservableObject {
             timeout: 12,
             expectedGeneration: expectedGeneration
         )
-        guard connectionGeneration == expectedGeneration else { throw DSHPetCommandError.unavailable }
+        guard connectionGeneration == expectedGeneration, sessionBindingGeneration == bindingGeneration,
+              selectedWorkspaceID == workspaceID else { throw DSHPetCommandError.unavailable }
         guard let returnedSession = response["sessionId"] as? String, !returnedSession.isEmpty else {
             throw DSHPetCommandError.malformed
         }
@@ -747,7 +967,8 @@ final class DSHPetCommandClient: ObservableObject {
             timeout: 8,
             expectedGeneration: expectedGeneration
         )
-        guard connectionGeneration == expectedGeneration else { throw DSHPetCommandError.unavailable }
+        guard connectionGeneration == expectedGeneration, sessionBindingGeneration == bindingGeneration,
+              selectedWorkspaceID == workspaceID, sessionID == returnedSession else { throw DSHPetCommandError.unavailable }
         if let snapshot = decodeSnapshot(subscribed["snapshot"]),
            snapshotMatchesSelectedInstance(snapshot) {
             sessionSnapshot = snapshot
@@ -764,6 +985,10 @@ final class DSHPetCommandClient: ObservableObject {
     }
 
     private func clearSessionBinding() {
+        sessionBindingGeneration &+= 1
+        sessionCreationTask?.cancel()
+        sessionCreationTask = nil
+        dismissCandidates()
         sessionID = nil
         sessionSnapshot = nil
         pendingRequestID = nil
@@ -794,6 +1019,15 @@ final class DSHPetCommandClient: ObservableObject {
 
     private func invalidateConnection(clearPersistedPending: Bool) {
         connectionGeneration &+= 1
+        sessionBindingGeneration &+= 1
+        sessionCreationTask?.cancel()
+        sessionCreationTask = nil
+        dismissCandidates()
+        previewGeneration &+= 1
+        previewTask?.cancel()
+        previewTask = nil
+        taskPreview = nil
+        taskPreviewStatus = focusedTaskID == nil ? nil : "Harness 连接已断开"
         connectionHandle?.cancel()
         connectionHandle = nil
         reconnectTask?.cancel()
@@ -817,7 +1051,18 @@ final class DSHPetCommandClient: ObservableObject {
         capabilitiesAvailable = false
         taskListAvailable = false
         imageAttachmentsAvailable = false
+        fileCandidatesAvailable = false
+        skillCandidatesAvailable = false
+        taskPreviewAvailable = false
         imageLimits = nil
+        dismissCandidates()
+        previewGeneration &+= 1
+        previewTask?.cancel()
+        previewTask = nil
+        if focusedTaskID != nil {
+            taskPreview = nil
+            taskPreviewStatus = "Harness 连接已断开"
+        }
         resetBubbleDeckState()
     }
 
@@ -903,6 +1148,12 @@ final class DSHPetCommandClient: ObservableObject {
                 applyTasks(object["tasks"])
                 continue
             }
+            if object["event"] as? String == "taskPreviewChanged" {
+                if let task = focusedTask, object["sessionId"] as? String == task.sessionID {
+                    refreshTaskPreview(task)
+                }
+                continue
+            }
             guard let id = object["id"] as? String, let continuation = pending.removeValue(forKey: id) else { continue }
             if let ok = object["ok"] as? Bool, !ok {
                 let error = object["error"] as? [String: Any]
@@ -969,6 +1220,9 @@ final class DSHPetCommandClient: ObservableObject {
                 let supports = response["supports"] as? [String] ?? []
                 taskListAvailable = supports.contains("tasks") && supports.contains("subscribeTasks")
                 imageAttachmentsAvailable = supports.contains("imageAttachments")
+                fileCandidatesAvailable = supports.contains("fileCandidates")
+                skillCandidatesAvailable = supports.contains("skillCandidates")
+                taskPreviewAvailable = supports.contains("taskPreview")
                 imageLimits = decodeImageLimits(response["attachmentLimits"])
                 if taskListAvailable {
                     subscribeTasks(expectedGeneration: generation)
@@ -978,6 +1232,7 @@ final class DSHPetCommandClient: ObservableObject {
                 }
                 if let sessionID { subscribe(to: sessionID, expectedGeneration: generation) }
                 refreshWorkspaces(expectedGeneration: generation)
+                if let task = focusedTask { refreshTaskPreview(task) }
             } catch {
                 guard self.connectionGeneration == generation else { return }
                 capabilitiesAvailable = false
@@ -1238,10 +1493,16 @@ final class DSHPetCommandClient: ObservableObject {
             hasReceivedTaskBaseline = true
             persistReadMarkers()
         }
+        let previousFocused = focusedTask
         let current = now()
         observeTaskTransitions(decoded, now: current)
         tasks = decoded
         rebuildBubbleDeck(now: current)
+        if let previousFocused,
+           let currentFocused = focusedTask,
+           previousFocused.taskRunning && !currentFocused.taskRunning {
+            refreshTaskPreview(currentFocused, retryEmpty: true)
+        }
     }
 
     func isTaskUnread(_ task: DSHPetTaskSummary) -> Bool {

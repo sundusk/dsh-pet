@@ -78,7 +78,11 @@ export interface CommandHandlers {
   createSession: (request: CreateSessionCommand) => Promise<{ sessionId: string }>
   openSession: (request: OpenSessionCommand) => Promise<{ accepted: true; sessionId: string }>
   prompt: (request: PromptCommand) => Promise<{ accepted: true; sessionId: string }>
-  snapshotFor: (sessionId: string) => MoodBridgePayload | undefined
+  snapshotFor: (sessionId: string) => MoodBridgePayload | undefined | Promise<MoodBridgePayload | undefined>
+  capabilities?: () => readonly string[]
+  fileCandidates?: (request: OpenSessionCommand & { query: string }) => Promise<{ candidates: readonly { path: string; kind: 'file' | 'directory' }[] }>
+  skillCandidates?: (request: OpenSessionCommand) => Promise<{ skills: readonly { name: string; description: string; conflict: boolean }[] }>
+  taskPreview?: (request: OpenSessionCommand) => Promise<{ status: 'available' | 'empty' | 'unsupported' | 'migration-required'; text?: string }>
 }
 
 interface ClientState {
@@ -99,6 +103,7 @@ interface CommandRequest {
   requestId?: unknown
   text?: unknown
   images?: unknown
+  query?: unknown
 }
 
 const COMMAND_METADATA_BYTES = 1024 * 1024
@@ -256,6 +261,13 @@ export class CommandBridge {
     }
   }
 
+  /** Notify task subscribers that a session's reply projection changed. */
+  publishTaskPreviewChange(sessionId: string): void {
+    for (const client of this.clients) {
+      if (client.taskSubscription) this.write(client.socket, { event: 'taskPreviewChanged', sessionId })
+    }
+  }
+
   stop(): void {
     this.probeGeneration += 1
     this.probing = false
@@ -339,6 +351,7 @@ export class CommandBridge {
           supports: [
             'workspaces', 'tasks', 'subscribeTasks', 'unsubscribeTasks',
             'createSession', 'openSession', 'prompt', 'imageAttachments', 'subscribe', 'unsubscribe',
+            ...(this.handlers.capabilities?.() ?? []),
           ],
           attachmentLimits: this.handlers.imageAttachmentLimits,
           maxCommandBytes: this.maxCommandBytes,
@@ -378,6 +391,24 @@ export class CommandBridge {
         this.respond(client.socket, id, result)
         return
       }
+      if (action === 'fileCandidates' || action === 'skillCandidates' || action === 'taskPreview') {
+        const workspaceId = stringField(request.workspaceId, 'workspaceId')
+        const sessionId = stringField(request.sessionId, 'sessionId')
+        if (!this.handlers.capabilities?.().includes(action)) {
+          throw new CommandError('unsupported', `${action} is unavailable`)
+        }
+        if (action === 'fileCandidates' && this.handlers.fileCandidates !== undefined) {
+          const query = optionalStringField(request.query, 'query') ?? ''
+          this.respond(client.socket, id, await this.handlers.fileCandidates({ workspaceId, sessionId, query }))
+        } else if (action === 'skillCandidates' && this.handlers.skillCandidates !== undefined) {
+          this.respond(client.socket, id, await this.handlers.skillCandidates({ workspaceId, sessionId }))
+        } else if (action === 'taskPreview' && this.handlers.taskPreview !== undefined) {
+          this.respond(client.socket, id, await this.handlers.taskPreview({ workspaceId, sessionId }))
+        } else {
+          throw new CommandError('unsupported', `${action} is unavailable`)
+        }
+        return
+      }
       if (action === 'prompt') {
         const workspaceId = stringField(request.workspaceId, 'workspaceId')
         const sessionId = stringField(request.sessionId, 'sessionId')
@@ -396,7 +427,7 @@ export class CommandBridge {
         client.subscriptions.add(sessionId)
         this.respond(client.socket, id, {
           sessionId,
-          snapshot: this.handlers.snapshotFor(sessionId) ?? null,
+          snapshot: await this.handlers.snapshotFor(sessionId) ?? null,
         })
         return
       }

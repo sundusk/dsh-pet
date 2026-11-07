@@ -113,10 +113,11 @@ export function apply(ctx: Context): void {
     questionActive: false,
   }
   const sessionStates = new Map<string, SessionMoodState>()
+  const unconfirmedSessions = new Set<string>()
   const sessionOperations = new Map<string, Promise<void>>()
   let taskSnapshot: DshPetTask[] = []
   let taskRefreshTimer: ReturnType<typeof setTimeout> | undefined
-  let refreshTaskSnapshot: (() => Promise<readonly DshPetTask[]>) | undefined
+  let refreshTaskSnapshot: ((timeoutMs?: number) => Promise<readonly DshPetTask[]>) | undefined
   let activeSessionId: string | undefined
   let commandBridge: CommandBridge | undefined
   const instance: HarnessInstanceDescriptor = createHarnessInstanceDescriptor(ctx)
@@ -190,6 +191,16 @@ export function apply(ctx: Context): void {
 
   const snapshotForSession = (sessionId: string): MoodBridgePayload =>
     snapshotOf(stateFor(sessionId, workspaceForSession(sessionId)))
+
+  const snapshotForTask = (task: DshPetTask): MoodBridgePayload => ({
+    ...snapshotForSession(task.sessionId),
+    state: task.state,
+    mood: task.mood as DshPetMood,
+    taskRunning: task.taskRunning,
+    waitingForUser: task.waitingForUser,
+    failed: task.failed,
+    completed: task.completed,
+  })
 
   const snapshot = (): MoodBridgePayload =>
     activeSessionId === undefined
@@ -273,7 +284,12 @@ export function apply(ctx: Context): void {
 
   const publish = (state: SessionMoodState): void => {
     localBridge.publish()
-    if (state.sessionId) commandBridge?.publish(state.sessionId, snapshotOf(state))
+    if (state.sessionId) {
+      const snapshot = snapshotOf(state)
+      commandBridge?.publish(state.sessionId, unconfirmedSessions.has(state.sessionId)
+        ? { ...snapshot, taskRunning: true, message: '无法确认任务状态，暂不可发送' }
+        : snapshot)
+    }
     scheduleTaskRefresh()
   }
 
@@ -339,12 +355,13 @@ export function apply(ctx: Context): void {
       state.mood = 'authorizing'
       state.holdUntil = 0
     } else if (event.type === 'approval/decided') {
-      const payload = (event.data ?? {}) as { result?: string }
-      if (payload.result === 'allowed-once') {
+      const payload = (event.data ?? {}) as { outcome?: string; result?: string }
+      const outcome = payload.outcome ?? payload.result
+      if (outcome === 'allowed-once') {
         state.lastResult = undefined
         state.mood = 'waiting'
         state.holdUntil = 0
-      } else if (payload.result === 'rejected' || payload.result === 'cancelled' || payload.result === 'unavailable') {
+      } else if (outcome === 'rejected' || outcome === 'cancelled' || outcome === 'unavailable') {
         setTransient(state, 'failed', 3000)
       }
     } else if (event.type === 'activity/status') {
@@ -441,6 +458,39 @@ export function apply(ctx: Context): void {
     })
   }
 
+  const optionalService = (name: string): unknown =>
+    (ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }).get?.(name, false)
+
+  const requireWorkspaceSession = (workspaceId: string, sessionId: string): void => {
+    const workspace = ctx.workspaceRegistry.get(workspaceId as never)
+    if (workspace === undefined || !workspace.sessionIds.some(candidate => String(candidate) === sessionId)) {
+      throw new Error(`session "${sessionId}" is not attached to workspace "${workspaceId}"`)
+    }
+  }
+
+  const resolveAgent = async (sessionId: string): Promise<unknown> => {
+    const controller = ctx.sessionController as unknown as {
+      resolveAgent?: (id: string) => Promise<{ agent?: unknown; error?: unknown }>
+    }
+    if (typeof controller.resolveAgent !== 'function') throw new Error('Harness agent resolution is unavailable')
+    const result = await controller.resolveAgent(sessionId)
+    if (result.error !== undefined) throw result.error
+    if (result.agent === undefined) throw new Error('Harness agent is unavailable')
+    return result.agent
+  }
+
+  const optionalCapabilities = (): string[] => {
+    const resolveAvailable = typeof (ctx.sessionController as unknown as { resolveAgent?: unknown }).resolveAgent === 'function'
+    const files = optionalService('sessionFileReferences') as { list?: unknown } | undefined
+    const skills = optionalService('sessionSkillCatalog') as { list?: unknown } | undefined
+    const commands = optionalService('commands') as { list?: unknown } | undefined
+    return [
+      ...(resolveAvailable && typeof files?.list === 'function' ? ['fileCandidates'] : []),
+      ...(resolveAvailable && typeof skills?.list === 'function' && typeof commands?.list === 'function' ? ['skillCandidates'] : []),
+      ...(typeof (ctx.sessionController as unknown as { projections?: unknown }).projections === 'function' ? ['taskPreview'] : []),
+    ]
+  }
+
   commandBridge = new CommandBridge({
     imageAttachmentLimits: (ctx as unknown as {
       attachments: { imageLimits: ImageAttachmentLimits }
@@ -499,15 +549,77 @@ export function apply(ctx: Context): void {
       }, AbortSignal.timeout(30_000))
       return { accepted: true, sessionId: request.sessionId }
     }),
-    snapshotFor: snapshotForSession,
+    capabilities: optionalCapabilities,
+    fileCandidates: async ({ workspaceId, sessionId, query }) => {
+      requireWorkspaceSession(workspaceId, sessionId)
+      const files = optionalService('sessionFileReferences') as {
+        list: (agent: unknown, query: string, signal: AbortSignal) => Promise<readonly { path: string; kind: 'file' | 'directory' }[]>
+      } | undefined
+      if (files === undefined) throw new Error('Harness file reference service is unavailable')
+      return { candidates: await files.list(await resolveAgent(sessionId), query, AbortSignal.timeout(15_000)) }
+    },
+    skillCandidates: async ({ workspaceId, sessionId }) => {
+      requireWorkspaceSession(workspaceId, sessionId)
+      const catalog = optionalService('sessionSkillCatalog') as {
+        list: (request: { sessionId: string }, signal: AbortSignal) => Promise<{ skills: readonly { name: string; description: string }[] }>
+      } | undefined
+      const commands = optionalService('commands') as { list: (agent: unknown) => readonly { name: string }[] } | undefined
+      if (catalog === undefined || commands === undefined) throw new Error('Harness skill or command service is unavailable')
+      const agent = await resolveAgent(sessionId)
+      const [listed, commandList] = await Promise.all([
+        catalog.list({ sessionId }, AbortSignal.timeout(15_000)),
+        Promise.resolve(commands.list(agent)),
+      ])
+      const names = new Set(commandList.map(command => command.name))
+      return { skills: listed.skills.map(skill => ({ name: skill.name, description: skill.description, conflict: names.has(skill.name) })) }
+    },
+    taskPreview: async ({ workspaceId, sessionId }) => {
+      requireWorkspaceSession(workspaceId, sessionId)
+      const result = await ctx.sessionController.projections({ sessionId: sessionId as never }, AbortSignal.timeout(15_000)) as unknown as {
+        kind?: string; values?: { turnOutline?: unknown }
+      } | null
+      if (result?.kind === 'migration-required') return { status: 'migration-required' as const }
+      const outline = result?.values?.turnOutline
+      if (!Array.isArray(outline)) return { status: 'unsupported' as const }
+      const last = outline.at(-1) as { response?: unknown } | undefined
+      if (typeof last?.response !== 'string' || last.response.trim() === '') return { status: 'empty' as const }
+      return { status: 'available' as const, text: last.response }
+    },
+    snapshotFor: async sessionId => {
+      const snapshot = snapshotForSession(sessionId)
+      let task: DshPetTask | undefined
+      try {
+        task = (await refreshTaskSnapshot?.(5_000))?.find(candidate => candidate.sessionId === sessionId)
+      } catch (error) {
+        console.warn(`[dsh-pet] unable to confirm session state: ${String(error)}`)
+      }
+      if (task !== undefined) return snapshotForTask(task)
+      unconfirmedSessions.add(sessionId)
+      return { ...snapshot, taskRunning: true, message: '无法确认任务状态，暂不可发送' }
+    },
   }, instance.commandSocketPath, instance)
 
-  refreshTaskSnapshot = async (): Promise<readonly DshPetTask[]> => {
-    const listed = await ctx.sessionController.list({}, AbortSignal.timeout(15_000))
+  refreshTaskSnapshot = async (timeoutMs = 15_000): Promise<readonly DshPetTask[]> => {
+    const listed = await ctx.sessionController.list({}, AbortSignal.timeout(timeoutMs))
     taskSnapshot = tasksFromSummaries(listed.items)
     commandBridge?.publishTasks(taskSnapshot)
+    for (const task of taskSnapshot) {
+      if (unconfirmedSessions.delete(task.sessionId)) {
+        commandBridge?.publish(task.sessionId, snapshotForTask(task))
+      }
+    }
     return taskSnapshot
   }
+
+  ctx.effect(() => {
+    const projections = optionalService('sessionProjections') as {
+      onChanged?: (listener: (session: Session, key: string) => void) => () => void
+    } | undefined
+    const dispose = projections?.onChanged?.((session, key) => {
+      if (key === 'turnOutline') commandBridge?.publishTaskPreviewChange(String(session.id))
+    })
+    return () => { dispose?.() }
+  }, 'dsh-pet: reply projection updates')
 
   ctx.effect(() => {
     statusReady = false

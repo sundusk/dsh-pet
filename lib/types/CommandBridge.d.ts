@@ -74,7 +74,27 @@ export interface CommandHandlers {
         accepted: true;
         sessionId: string;
     }>;
-    snapshotFor: (sessionId: string) => MoodBridgePayload | undefined;
+    snapshotFor: (sessionId: string) => MoodBridgePayload | undefined | Promise<MoodBridgePayload | undefined>;
+    capabilities?: () => readonly string[];
+    fileCandidates?: (request: OpenSessionCommand & {
+        query: string;
+    }) => Promise<{
+        candidates: readonly {
+            path: string;
+            kind: 'file' | 'directory';
+        }[];
+    }>;
+    skillCandidates?: (request: OpenSessionCommand) => Promise<{
+        skills: readonly {
+            name: string;
+            description: string;
+            conflict: boolean;
+        }[];
+    }>;
+    taskPreview?: (request: OpenSessionCommand) => Promise<{
+        status: 'available' | 'empty' | 'unsupported' | 'migration-required';
+        text?: string;
+    }>;
 }
 /**
  * User-local command and session-status transport.
@@ -103,6 +123,8 @@ export declare class CommandBridge {
     publish(sessionId: string, snapshot: MoodBridgePayload): void;
     /** Push a replacement task projection to clients that requested task updates. */
     publishTasks(tasks: readonly DshPetTask[]): void;
+    /** Notify task subscribers that a session's reply projection changed. */
+    publishTaskPreviewChange(sessionId: string): void;
     stop(): void;
     private consume;
     private rejectOversizedRequest;
