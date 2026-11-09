@@ -129,8 +129,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusSink: AnyCancellable?
     private var statusHeaderItem: NSMenuItem?
     private var togglePetMenuItem: NSMenuItem?
-    private var nextBubbleMenuItem: NSMenuItem?
-    private var aggregateBubbleMenuItem: NSMenuItem?
     private var shortcutMenuItems: [DSHPetShortcutAction: [NSMenuItem]] = [:]
     private var lastIconColor: Color?
     private let globalHotKeyManager = GlobalHotKeyManager()
@@ -906,24 +904,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         menu.addItem(togglePetMenuItem!)
 
-        let nextBubble = NSMenuItem(
-            title: "下一个气泡",
-            action: #selector(nextBubbleFromMenu),
-            keyEquivalent: ""
-        )
-        nextBubble.target = self
-        nextBubbleMenuItem = nextBubble
-        menu.addItem(nextBubble)
-
-        let aggregateBubble = NSMenuItem(
-            title: "回到总览气泡",
-            action: #selector(aggregateBubbleFromMenu),
-            keyEquivalent: ""
-        )
-        aggregateBubble.target = self
-        aggregateBubbleMenuItem = aggregateBubble
-        menu.addItem(aggregateBubble)
-
         menu.addItem(makeShortcutMenuItem(
             action: .openSettings,
             title: "设置…",
@@ -965,17 +945,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.setAccessibilityLabel(model.statusText)
         statusHeaderItem?.title = model.statusText
         togglePetMenuItem?.title = SettingsStore.shared.isPetVisible ? "隐藏宠物" : "显示宠物"
-        nextBubbleMenuItem?.isEnabled = model.canCycleBubbles
-        aggregateBubbleMenuItem?.isEnabled = model.canShowAggregateBubble
         applyMenuShortcuts()
-    }
-
-    @objc private func nextBubbleFromMenu() {
-        model.advanceBubble()
-    }
-
-    @objc private func aggregateBubbleFromMenu() {
-        model.showAggregateBubble()
     }
 
     private func makeShortcutMenuItem(

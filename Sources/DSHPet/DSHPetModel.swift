@@ -412,28 +412,6 @@ final class DSHPetModel: ObservableObject {
         commandClient.openTaskSession(task)
     }
 
-    func showAggregateBubble() {
-        let deck = commandClient.bubbleDeck
-        guard commandClient.connection == .connected,
-              commandClient.taskListAvailable,
-              deck.mode == .multi,
-              let first = deck.pages.first else { return }
-        applyBubbleDeck(deck, forceSelection: first.id)
-    }
-
-    var canCycleBubbles: Bool {
-        commandClient.connection == .connected
-            && commandClient.taskListAvailable
-            && commandClient.bubbleDeck.mode == .multi
-            && commandClient.bubbleDeck.pages.count > 1
-    }
-
-    var canShowAggregateBubble: Bool {
-        guard canCycleBubbles else { return false }
-        let aggregateID = commandClient.bubbleDeck.pages.first?.id
-        return selectedBubbleID != aggregateID
-    }
-
     private func apply(_ snapshot: MoodBridgeSnapshot, connection: TransportConnection) {
         breathingPeriod = SettingsStore.shared.breathingSpeed
 
