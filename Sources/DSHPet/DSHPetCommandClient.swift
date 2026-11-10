@@ -168,12 +168,13 @@ final class DSHPetCommandClient: ObservableObject {
     private let queue = DispatchQueue(label: "com.sundusk.dsh-pet.command-client")
     private var connectionHandle: NWConnection?
     private var receiveBuffer = Data()
-    private var queuedPayloads: [Data] = []
+    private var queuedPayloads: [(id: String, data: Data)] = []
     private var pending: [String: (Result<[String: Any], Error>) -> Void] = [:]
     private var started = false
     private var pendingRequestID: String?
     private var pendingRequestText: String?
     private var pendingRequestSignature: String?
+    private var promptMayHaveBeenSent = false
     private var reconnectTask: Task<Void, Never>?
     private var connectionGeneration = 0
     private var capabilitiesValidated = false
@@ -215,6 +216,7 @@ final class DSHPetCommandClient: ObservableObject {
         pendingRequestID = defaults.string(forKey: Keys.requestID)
         pendingRequestText = defaults.string(forKey: Keys.requestText)
         pendingRequestSignature = defaults.string(forKey: Keys.requestSignature)
+        promptMayHaveBeenSent = pendingRequestID != nil
         // Attachments are no longer exposed by the DSHPet composer. Ignore
         // any legacy persisted draft metadata so it can never be sent unseen.
         defaults.removeObject(forKey: Keys.draftImages)
@@ -379,7 +381,7 @@ final class DSHPetCommandClient: ObservableObject {
             queuedPayloads.removeAll(keepingCapacity: false)
             failPending(with: DSHPetCommandError.unavailable)
             if submissionStatus == .submitting {
-                submissionStatus = pendingRequestID == nil ? .idle : .unconfirmed
+                submissionStatus = promptMayHaveBeenSent ? .unconfirmed : .failed("消息尚未发送，请在连接恢复后重试")
             }
         }
 
@@ -860,6 +862,7 @@ final class DSHPetCommandClient: ObservableObject {
             pendingRequestID = requestID
             pendingRequestText = text
             pendingRequestSignature = signature
+            promptMayHaveBeenSent = false
             defaults.set(requestID, forKey: Keys.requestID)
             defaults.set(text, forKey: Keys.requestText)
             defaults.set(signature, forKey: Keys.requestSignature)
@@ -870,6 +873,7 @@ final class DSHPetCommandClient: ObservableObject {
         let generation = connectionGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
+            var promptAttempted = false
             do {
                 guard self.connectionGeneration == generation else { throw DSHPetCommandError.unavailable }
                 let encodedImages = try encodedDraftImages(submittedImages)
@@ -877,6 +881,8 @@ final class DSHPetCommandClient: ObservableObject {
                 let sessionID = try await ensureSession(expectedGeneration: generation)
                 guard self.connectionGeneration == generation else { throw DSHPetCommandError.unavailable }
                 let workspaceID = try requireWorkspaceID()
+                promptAttempted = promptMayHaveBeenSent || (connection == .connected && capabilitiesValidated && connectionHandle != nil)
+                promptMayHaveBeenSent = promptAttempted
                 let response = try await request(
                     action: "prompt",
                     fields: [
@@ -899,6 +905,7 @@ final class DSHPetCommandClient: ObservableObject {
                 pendingRequestID = nil
                 pendingRequestText = nil
                 pendingRequestSignature = nil
+                promptMayHaveBeenSent = false
                 defaults.removeObject(forKey: Keys.requestID)
                 defaults.removeObject(forKey: Keys.requestText)
                 defaults.removeObject(forKey: Keys.requestSignature)
@@ -912,12 +919,14 @@ final class DSHPetCommandClient: ObservableObject {
                 if submissionStatus == .submitted { submissionStatus = .idle }
             } catch {
                 guard self.connectionGeneration == generation else { return }
-                if case DSHPetCommandError.timedOut = error {
-                    submissionStatus = .unconfirmed
-                } else {
+                switch error {
+                case DSHPetCommandError.timedOut, DSHPetCommandError.unavailable:
+                    submissionStatus = promptAttempted || promptMayHaveBeenSent
+                        ? .unconfirmed : .failed("消息尚未发送，请在连接恢复后重试")
+                default:
                     submissionStatus = .failed(errorMessage(error))
                 }
-                lastError = errorMessage(error)
+                lastError = submissionStatus.label ?? errorMessage(error)
                 if !draftImages.isEmpty {
                     let message = errorMessage(error)
                     for index in draftImages.indices where submittedImageIDs.contains(draftImages[index].id) {
@@ -994,6 +1003,7 @@ final class DSHPetCommandClient: ObservableObject {
         pendingRequestID = nil
         pendingRequestText = nil
         pendingRequestSignature = nil
+        promptMayHaveBeenSent = false
         defaults.removeObject(forKey: Keys.sessionID)
         defaults.removeObject(forKey: Keys.requestID)
         defaults.removeObject(forKey: Keys.requestText)
@@ -1039,6 +1049,7 @@ final class DSHPetCommandClient: ObservableObject {
             pendingRequestID = nil
             pendingRequestText = nil
             pendingRequestSignature = nil
+            promptMayHaveBeenSent = false
             defaults.removeObject(forKey: Keys.requestID)
             defaults.removeObject(forKey: Keys.requestText)
             defaults.removeObject(forKey: Keys.requestSignature)
@@ -1188,7 +1199,7 @@ final class DSHPetCommandClient: ObservableObject {
         let data = try JSONSerialization.data(withJSONObject: object)
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = { result in continuation.resume(with: result) }
-            queuedPayloads.append(data)
+            queuedPayloads.append((id: id, data: data))
             if connection == .connected { flushQueuedPayloads() }
             Task { @MainActor [weak self] in
                 let delay = UInt64(max(0.5, timeout) * 1_000_000_000)
@@ -1250,12 +1261,13 @@ final class DSHPetCommandClient: ObservableObject {
         let payloads = queuedPayloads
         queuedPayloads.removeAll(keepingCapacity: true)
         for payload in payloads {
-            connectionHandle.send(content: payload + Data([10]), completion: .contentProcessed { _ in })
+            connectionHandle.send(content: payload.data + Data([10]), completion: .contentProcessed { _ in })
         }
     }
 
     private func timeOut(_ id: String) {
         guard let continuation = pending.removeValue(forKey: id) else { return }
+        queuedPayloads.removeAll { $0.id == id }
         continuation(.failure(DSHPetCommandError.timedOut))
     }
 
@@ -1272,6 +1284,7 @@ final class DSHPetCommandClient: ObservableObject {
     }
 
     private func failPending(with error: Error) {
+        queuedPayloads.removeAll(keepingCapacity: false)
         let continuations = pending.values
         pending.removeAll()
         for continuation in continuations { continuation(.failure(error)) }
@@ -1408,6 +1421,7 @@ final class DSHPetCommandClient: ObservableObject {
         pendingRequestID = nil
         pendingRequestText = nil
         pendingRequestSignature = nil
+        promptMayHaveBeenSent = false
         defaults.removeObject(forKey: Keys.requestID)
         defaults.removeObject(forKey: Keys.requestText)
         defaults.removeObject(forKey: Keys.requestSignature)

@@ -255,8 +255,7 @@ final class DSHPetModel: ObservableObject {
     @discardableResult
     private func configureHarness(_ instance: HarnessInstance?, force: Bool = false) -> Bool {
         guard didStart else { return true }
-        let legacy = instance == nil && harnessConnections.instances.isEmpty
-            && harnessConnections.selectionID == "auto"
+        let legacy = instance == nil && harnessConnections.allowsLegacyFallback
         let id = instance?.id ?? (legacy ? "legacy-read-only" : "none")
         guard force || id != configuredHarnessID else { return true }
         // Source-less legacy sockets cannot prove that status and commands have the same owner.

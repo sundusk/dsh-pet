@@ -250,7 +250,17 @@ struct DSHPetComposerView: View {
                 .padding(.bottom, 4.5)
             }
 
-            if command.connection != .connected || !command.capabilitiesAvailable {
+            if command.submissionStatus == .unconfirmed {
+                Text("提交结果未确认，请在 Harness 中检查")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if case .failed(let message) = command.submissionStatus {
+                Text(message)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if command.connection != .connected || !command.capabilitiesAvailable {
                 Text("输入服务未连接，请确认 DSH Pet 桥接插件已加载")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)

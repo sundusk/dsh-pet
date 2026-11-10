@@ -55,6 +55,10 @@ final class HarnessConnectionManager: ObservableObject {
     @Published private(set) var message: String?
     @Published private(set) var openingError: String?
 
+    var allowsLegacyFallback: Bool {
+        selectionID == "auto" && autoBindingKey == nil && instances.isEmpty
+    }
+
     /// Called before changing channels so the command client can protect pending input.
     var onTargetChange: ((HarnessInstance?) -> Bool)?
     var onRefresh: (() -> Void)?
@@ -73,6 +77,7 @@ final class HarnessConnectionManager: ObservableObject {
     private let defaults: UserDefaults
     private var discoveryTask: Task<Void, Never>?
     private var preferredBindingKey: String?
+    private var autoBindingKey: String?
     private static let selectionKey = "dsh-pet.harness.selection"
     private static let bindingKey = "dsh-pet.harness.binding"
 
@@ -81,6 +86,7 @@ final class HarnessConnectionManager: ObservableObject {
         self.defaults = defaults
         selectionID = defaults.string(forKey: Self.selectionKey) ?? "auto"
         preferredBindingKey = defaults.string(forKey: Self.bindingKey)
+        autoBindingKey = selectionID == "auto" ? preferredBindingKey : nil
     }
 
     func start() {
@@ -123,15 +129,18 @@ final class HarnessConnectionManager: ObservableObject {
         guard id == "auto" || instances.contains(where: { $0.id == id }) else { return false }
         let previousSelection = selectionID
         let previousPreference = preferredBindingKey
+        let previousAutoBinding = autoBindingKey
         selectionID = id
         preferredBindingKey = id == "auto" ? nil : instances.first(where: { $0.id == id })?.bindingKey
+        if id == "auto" { autoBindingKey = effectiveInstance?.bindingKey }
         guard reconcile() else {
             selectionID = previousSelection
             preferredBindingKey = previousPreference
+            autoBindingKey = previousAutoBinding
             return false
         }
         defaults.set(selectionID, forKey: Self.selectionKey)
-        defaults.set(preferredBindingKey, forKey: Self.bindingKey)
+        defaults.set(selectionID == "auto" ? autoBindingKey : preferredBindingKey, forKey: Self.bindingKey)
         return true
     }
 
@@ -139,9 +148,13 @@ final class HarnessConnectionManager: ObservableObject {
     private func reconcile() -> Bool {
         let candidate: HarnessInstance?
         if selectionID == "auto" {
-            // Keep the current source when another Harness appears during a task.
-            candidate = instances.first(where: { $0.id == effectiveInstance?.id })
-                ?? (instances.count == 1 ? instances.first : nil)
+            if let autoBindingKey {
+                let replacements = instances.filter { $0.bindingKey == autoBindingKey }
+                candidate = instances.first(where: { $0.id == effectiveInstance?.id })
+                    ?? (replacements.count == 1 ? replacements.first : nil)
+            } else {
+                candidate = instances.count == 1 ? instances.first : nil
+            }
         } else {
             let replacements = instances.filter { $0.bindingKey == preferredBindingKey }
             candidate = instances.first(where: { $0.id == selectionID })
@@ -154,6 +167,10 @@ final class HarnessConnectionManager: ObservableObject {
             }
             effectiveInstance = candidate
         }
+        if selectionID == "auto", let candidate, autoBindingKey != candidate.bindingKey {
+            autoBindingKey = candidate.bindingKey
+            defaults.set(candidate.bindingKey, forKey: Self.bindingKey)
+        }
         if selectionID != "auto", let candidate, selectionID != candidate.id {
             selectionID = candidate.id
             defaults.set(selectionID, forKey: Self.selectionKey)
@@ -161,7 +178,7 @@ final class HarnessConnectionManager: ObservableObject {
         if effectiveInstance == nil {
             if instances.count > 1 {
                 message = "检测到多个 Harness，请选择本次连接的目标。"
-            } else if selectionID != "auto" {
+            } else if selectionID != "auto" || autoBindingKey != nil {
                 message = "选定的 Harness 未运行。不会自动改连其他目标。"
             } else {
                 message = "未发现新版桥接实例。旧版连接只能显示来源未知；升级桥接插件后可选择目标。"
@@ -207,7 +224,7 @@ final class HarnessConnectionManager: ObservableObject {
     func open(legacyWebAddress: String, legacyConnected: Bool = false) {
         openingError = nil
         guard let instance = effectiveInstance else {
-            guard legacyConnected, instances.isEmpty, selectionID == "auto",
+            guard legacyConnected, allowsLegacyFallback,
                   let url = HarnessInstance.safeWebURL(legacyWebAddress) else {
                 openingError = "请先选择可用的 Harness；旧版插件需升级后才能识别打开目标。"
                 return

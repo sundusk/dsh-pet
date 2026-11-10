@@ -28,10 +28,10 @@
 ### 项目组成
 
 - **DSH Pet.app**：以鲸鱼娘为默认形象的 macOS 桌宠应用，提供状态气泡、任务卡片与消息输入
-- **DSH Pet 桥接插件**（包名 `@sundusk/dsh-pet`）：订阅 Agent 会话事件，提供 HTTP/状态 Socket 兼容接口、用户级命令 Socket，以及一个不渲染 UI 的浏览器半区，用来在当前 Harness 客户端中打开桌宠选中的会话；无设置项
+- **DSH Pet 桥接插件**（包名 `@sundusk/dsh-pet`）：订阅 Agent 会话事件，提供 HTTP/状态 Socket 兼容接口、用户级命令 Socket，以及安装桌宠引导和桌宠会话跳转；无插件设置项
 
 旧名称和数据位置保留必要的兼容处理。安装脚本会清理旧版 `MoodBall.app`。
-当前源码对应的桌面 App 版本为 **v0.9.2**，桥接插件版本为 **v0.9.1**。已发布的 `DSH-Pet.app.zip` 安装包可从 [GitHub Releases](https://github.com/sundusk/dsh-pet/releases/latest) 下载；安装脚本也会自动获取最新发布的安装包。
+当前源码对应的桌面 App 版本为 **v0.9.3**，桥接插件版本为 **v0.9.2**。已发布的 `DSH-Pet.app.zip` 安装包可从 [GitHub Releases](https://github.com/sundusk/dsh-pet/releases/latest) 下载；安装脚本也会自动获取最新发布的安装包。
 
 一切配置都在 app 的设置面板里完成。新版设置面板包含六个页面：「桌宠外观」「交互与提醒」「快捷键」「宠物管理」「Harness 连接」和「关于与更新」。
 
@@ -74,7 +74,9 @@ pnpm dsh web
 
 ### 安装 DSH Pet（推荐）
 
-另开一个终端执行：
+如果已在 Harness 的「插件」页面安装并启用 `@sundusk/dsh-pet`，未安装 App 或无法确认安装状态时，可从侧栏的「安装桌宠」进入下载和安装引导。安装 App 后，在 App 的「Harness 连接」页选择目标并检查连接；如果 Harness 提示需要重启，请等当前任务结束后再重启。
+
+也可以使用安装脚本。另开一个终端执行：
 
 ```bash
 git clone --depth 1 https://github.com/sundusk/dsh-pet.git
@@ -108,7 +110,7 @@ DSH_SOURCE_ROOT="$HOME/Projects/deepseek-harness" bash install.sh
 
 如需自行构建，请先安装 Xcode 命令行工具，在本仓库运行 `DSH_PET_SKIP_OPEN=1 bash make-app.sh`，再运行 `bash install.sh`。
 
-桌面版使用独立的 `desktop` profile。已有桌面版的「插件」页面流程仍有效：请在桌面版「插件」页面安装并启用 `github:sundusk/dsh-pet`，再重启桌面版让插件加载。官方内置 CLI 需先完成初始化，并退出桌面版后才可管理该 `desktop` profile；NPM/NPX CLI 不能管理桌面版 profile。安装器检测到桌面版时不会把插件误装到 `web` profile。DSH Pet 使用本地 Socket 接收桌面版状态；桌面版晚启动或重启后会自动重连。
+桌面版使用独立的 `desktop` profile。请在桌面版「插件」页面搜索并启用 `@sundusk/dsh-pet`；如 Harness 提示需要重启，待当前任务结束后再重启以加载插件。官方内置 CLI 需先完成初始化，并退出桌面版后才可管理该 `desktop` profile；NPM/NPX CLI 不能管理桌面版 profile。安装器检测到桌面版时不会把插件误装到 `web` profile。DSH Pet 使用本地 Socket 接收桌面版状态；桌面版晚启动或重启后会自动重连。
 
 ### 手动安装桥接插件
 

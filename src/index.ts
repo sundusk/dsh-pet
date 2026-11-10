@@ -24,6 +24,7 @@ import {
   type DshPetWorkspace,
 } from './CommandBridge.js'
 import { LocalStateBridge, type MoodBridgePayload } from './LocalStateBridge.js'
+import { detectHostApp } from './InstallDetection.js'
 import {
   createHarnessInstanceDescriptor,
   HarnessInstanceManifest,
@@ -721,6 +722,46 @@ export function apply(ctx: Context): void {
     },
   }
 
+  let installationCheck: ReturnType<typeof detectHostApp> | undefined
+  const installationRoute: WebRoute = {
+    kind: 'exact',
+    path: '/api/dsh-pet/install-status',
+    handler: async (req, res): Promise<void> => {
+      // Named webServer routes have no global authentication; use Harness's fence.
+      let connection: { requestRejection?: (request: IncomingMessage) => number | undefined } | undefined
+      try {
+        connection = ctx.get('connection') as typeof connection
+      } catch {
+        json(res, 503, { status: 'unknown' })
+        return
+      }
+      if (typeof connection?.requestRejection !== 'function') {
+        json(res, 503, { status: 'unknown' })
+        return
+      }
+      let rejection: number | undefined
+      try {
+        rejection = connection.requestRejection(req)
+      } catch {
+        json(res, 503, { status: 'unknown' })
+        return
+      }
+      if (rejection !== undefined) {
+        res.writeHead(rejection)
+        res.end()
+        return
+      }
+      if (req.method !== 'GET') {
+        json(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      installationCheck ??= detectHostApp().finally(() => { installationCheck = undefined })
+      const status = await installationCheck
+      res.setHeader('cache-control', 'no-store')
+      json(res, 200, { status })
+    },
+  }
+
   // Keep the former endpoint during the package rename so an older desktop
   // app can finish its upgrade without losing the status bridge.
   const legacyStatusRoute: WebRoute = { ...statusRoute, path: '/api/moodball/status' }
@@ -729,6 +770,7 @@ export function apply(ctx: Context): void {
   // namespace, so nothing can take it down while the plugin is loaded.
   ctx.effect(() => {
     const dispose = ctx.webServer.register(statusRoute)
+    const disposeInstallation = ctx.webServer.register(installationRoute)
     const disposeLegacy = ctx.webServer.register(legacyStatusRoute)
     const disposePending = ctx.webServer.register(sessionOpenPendingRoute)
     const disposeAck = ctx.webServer.register(sessionOpenAckRoute)
@@ -741,6 +783,7 @@ export function apply(ctx: Context): void {
       }
       pendingSessionOpens.clear()
       disposeLegacy()
+      disposeInstallation()
       dispose()
     }
   }, 'dsh-pet: status and session-open routes')

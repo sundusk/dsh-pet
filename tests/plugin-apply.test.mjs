@@ -294,6 +294,7 @@ test('plugin adapter calls official-style workspace and session services', async
     let routeBody
     assert.deepEqual(routes.map(route => route.path), [
       '/api/dsh-pet/status',
+      '/api/dsh-pet/install-status',
       '/api/moodball/status',
       '/api/dsh-pet/session-open/pending',
       '/api/dsh-pet/session-open/ack',

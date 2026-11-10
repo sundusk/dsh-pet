@@ -942,12 +942,13 @@ private struct HarnessConnectionSettingsPage: View {
                             }
                         }
                     }
-                    SettingsCard(title: "遇到连接问题？") {
+                    SettingsCard(title: "安装与连接") {
                         VStack(alignment: .leading, spacing: 9) {
-                            ConnectionHelpStep(number: "1", text: "确认 Harness 正在运行")
-                            ConnectionHelpStep(number: "2", text: "确认桥接插件已安装并启用")
-                            ConnectionHelpStep(number: "3", text: "仅状态可用时，检查消息通道")
-                            Text("连接状态来自当前通道，不会修改 Harness 的模型或插件设置。")
+                            ConnectionHelpStep(number: "1", text: "打开桌面版 Harness，进入「插件」页面。")
+                            ConnectionHelpStep(number: "2", text: "搜索 @sundusk/dsh-pet，按需安装并启用。")
+                            ConnectionHelpStep(number: "3", text: "如 Harness 提示需要重启，请在任务结束后重启。")
+                            ConnectionHelpStep(number: "4", text: "回到此处选择连接目标，点击「重新检测」。")
+                            Text("如果插件已经启用，请确认 Harness 正在运行；仅状态可用时，检查消息通道。")
                                 .font(.caption).foregroundStyle(.secondary).padding(.top, 5)
                         }
                     }

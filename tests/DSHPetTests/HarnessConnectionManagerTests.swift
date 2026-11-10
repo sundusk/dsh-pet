@@ -5,6 +5,41 @@ import XCTest
 
 final class HarnessConnectionManagerTests: XCTestCase {
     @MainActor
+    func testAutomaticSelectionWaitsForSameSourceAfterItDisappears() throws {
+        let fixture = try RegistryFixture()
+        defer { fixture.cleanup() }
+        let manager = HarnessConnectionManager(directory: fixture.directory, defaults: fixture.defaults)
+        manager.refresh()
+        XCTAssertTrue(manager.allowsLegacyFallback)
+        let first = try fixture.add("first", kind: .desktop, targetID: "desktop-a")
+        manager.refresh()
+        XCTAssertEqual(manager.effectiveInstance?.id, first.id)
+        XCTAssertFalse(manager.allowsLegacyFallback)
+
+        let other = try fixture.add("other", kind: .web, targetID: "web-b")
+        manager.refresh()
+        XCTAssertEqual(manager.effectiveInstance?.id, first.id)
+        try fixture.remove(first.id)
+        manager.refresh()
+        XCTAssertNil(manager.effectiveInstance)
+        XCTAssertTrue(manager.message?.contains("不会自动改连") == true)
+        try fixture.remove(other.id)
+        manager.refresh()
+        XCTAssertFalse(manager.allowsLegacyFallback)
+        let reopened = HarnessConnectionManager(directory: fixture.directory, defaults: fixture.defaults)
+        reopened.refresh()
+        XCTAssertNil(reopened.effectiveInstance)
+        XCTAssertFalse(reopened.allowsLegacyFallback)
+
+        let restarted = try fixture.add("restarted", kind: .desktop, targetID: "desktop-a")
+        manager.refresh()
+        reopened.refresh()
+        XCTAssertEqual(manager.effectiveInstance?.id, restarted.id)
+        XCTAssertEqual(reopened.effectiveInstance?.id, restarted.id)
+        XCTAssertNotEqual(manager.effectiveInstance?.id, other.id)
+    }
+
+    @MainActor
     func testMultipleInstancesRequireSelectionAndKeepTheSelectedSource() throws {
         let fixture = try RegistryFixture()
         defer { fixture.cleanup() }

@@ -5,6 +5,37 @@ import XCTest
 
 final class CommandSocketHandshakeTests: XCTestCase {
     @MainActor
+    func testDisconnectDuringPromptRemainsUnconfirmedWithoutAutomaticResend() async throws {
+        let path = "/tmp/dsh-pet-command-\(UUID().uuidString.prefix(8)).sock"
+        let instance = makeInstance(id: "selected", status: "/tmp/selected-status.sock", command: path)
+        let server = try CommandSocketServer(path: path, instance: instance, disconnectOnPrompt: true)
+        defer { server.stop() }
+        let suite = "CommandSocketHandshakeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
+        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        client.start()
+        defer { client.stop() }
+        await server.waitForAction("workspaces")
+        for _ in 0..<100 where client.selectedWorkspaceID == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertNotNil(client.selectedWorkspaceID)
+        client.draft = "断线时保留的消息"
+        client.submitDraft()
+        await server.waitForAction("prompt")
+        for _ in 0..<100 where client.submissionStatus != .unconfirmed {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(client.submissionStatus, .unconfirmed)
+        XCTAssertEqual(client.draft, "断线时保留的消息")
+        await server.waitForActionCount("capabilities", atLeast: 2)
+        XCTAssertGreaterThanOrEqual(server.actionCount("capabilities"), 2)
+        XCTAssertEqual(server.actionCount("prompt"), 1)
+    }
+
+    @MainActor
     func testPreviewUpdatesOnlyForFocusedSession() async throws {
         let path = "/tmp/dsh-pet-command-\(UUID().uuidString.prefix(8)).sock"
         let instance = makeInstance(id: "selected", status: "/tmp/selected-status.sock", command: path)
@@ -177,6 +208,8 @@ final class CommandSocketHandshakeTests: XCTestCase {
         // Reconnect the same selected target while createSession is awaiting a
         // response. The old task must not subscribe or prompt on the new socket.
         XCTAssertTrue(client.configure(instance: nil, allowLegacy: false))
+        XCTAssertEqual(client.submissionStatus, .failed("消息尚未发送，请在连接恢复后重试"))
+        XCTAssertEqual(client.draft, "等待来源切换")
         XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
         server.releaseCreateSession()
         await server.waitForActionCount("capabilities", atLeast: 2)
@@ -216,17 +249,19 @@ private final class CommandSocketServer: @unchecked Sendable {
     private let delayCreateSession: Bool
     private let candidateSupport: Bool
     private let previewSupport: Bool
+    private let disconnectOnPrompt: Bool
     private let createSessionRelease = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var clients: [Int32] = []
     private(set) var actions: [String] = []
 
-    init(path: String, instance: HarnessInstance, delayCreateSession: Bool = false, candidateSupport: Bool = false, previewSupport: Bool = false) throws {
+    init(path: String, instance: HarnessInstance, delayCreateSession: Bool = false, candidateSupport: Bool = false, previewSupport: Bool = false, disconnectOnPrompt: Bool = false) throws {
         self.path = path
         self.instance = instance
         self.delayCreateSession = delayCreateSession
         self.candidateSupport = candidateSupport
         self.previewSupport = previewSupport
+        self.disconnectOnPrompt = disconnectOnPrompt
         listener = try Self.makeListener(path: path)
         DispatchQueue.global().async { [weak self] in self?.acceptLoop() }
     }
@@ -301,6 +336,10 @@ private final class CommandSocketServer: @unchecked Sendable {
                       let id = request["id"] as? String,
                       let action = request["action"] as? String else { continue }
                 lock.withLock { actions.append(action) }
+                if action == "prompt", disconnectOnPrompt {
+                    Darwin.shutdown(client, SHUT_RDWR)
+                    return
+                }
                 let response: [String: Any]
                 if action == "capabilities" {
                     response = [
