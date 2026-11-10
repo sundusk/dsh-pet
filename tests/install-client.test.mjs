@@ -66,7 +66,7 @@ test('web installation panel reports host status without claiming the browser de
     assert.ok(content.includes('Harness 所在设备：已检测到 DSH Pet。'))
     assert.ok(content.includes('无法确认你当前使用的设备是否就是 Harness 所在设备，请在本机检查 DSH Pet 是否已安装。'))
     assert.ok(content.includes('系统要求：macOS 14 或更新版本，Apple 芯片 Mac。'))
-    assert.ok(content.some(node => node?.type === 'a' && node.props.href === 'https://github.com/sundusk/dsh-pet/releases/latest/download/DSH-Pet.app.zip'))
+    assert.ok(content.some(node => node?.type === 'a' && node.props.href === 'https://github.com/sundusk/dsh-mac-pet/releases/latest/download/DSH-Pet.app.zip'))
     assert.deepEqual(fixture.requests, ['http://localhost:3080/api/dsh-pet/install-status'])
     content.find(node => node?.type === 'button').props.onClick()
     await new Promise(resolve => setImmediate(resolve))

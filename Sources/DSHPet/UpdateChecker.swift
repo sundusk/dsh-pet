@@ -4,7 +4,7 @@ import Foundation
 /// 纯 app 侧实现——插件只负责状态接口，app 的功能（含更新）都在自己身上。
 enum UpdateChecker {
     /// 发布仓库（与 install.sh / make-app.sh 一致）。
-    static let repo = "sundusk/dsh-pet"
+    static let repo = "sundusk/dsh-mac-pet"
 
     /// Releases 首页（「前往下载」跳转目标）。
     static let releasesPageURL = URL(string: "https://github.com/\(repo)/releases/latest")!

@@ -945,7 +945,7 @@ private struct HarnessConnectionSettingsPage: View {
                     SettingsCard(title: "安装与连接") {
                         VStack(alignment: .leading, spacing: 9) {
                             ConnectionHelpStep(number: "1", text: "打开桌面版 Harness，进入「插件」页面。")
-                            ConnectionHelpStep(number: "2", text: "搜索 @sundusk/dsh-pet，按需安装并启用。")
+                            ConnectionHelpStep(number: "2", text: "搜索 dsh-mac-pet，按需安装并启用。")
                             ConnectionHelpStep(number: "3", text: "如 Harness 提示需要重启，请在任务结束后重启。")
                             ConnectionHelpStep(number: "4", text: "回到此处选择连接目标，点击「重新检测」。")
                             Text("如果插件已经启用，请确认 Harness 正在运行；仅状态可用时，检查消息通道。")
@@ -1062,11 +1062,11 @@ private struct AboutSettingsPage: View {
                 Divider()
                 SettingsCard(title: "帮助与反馈") {
                     VStack(alignment: .leading, spacing: 0) {
-                        AboutLinkRow(title: "使用说明", detail: "安装、连接与桌宠操作", icon: "doc.text", url: URL(string: "https://github.com/sundusk/dsh-pet#readme")!)
+                        AboutLinkRow(title: "使用说明", detail: "安装、连接与桌宠操作", icon: "doc.text", url: URL(string: "https://github.com/sundusk/dsh-mac-pet#readme")!)
                         Divider().opacity(0.45)
-                        AboutLinkRow(title: "项目主页", detail: "查看源码与项目介绍", icon: "arrow.up.right.square", url: URL(string: "https://github.com/sundusk/dsh-pet")!)
+                        AboutLinkRow(title: "项目主页", detail: "查看源码与项目介绍", icon: "arrow.up.right.square", url: URL(string: "https://github.com/sundusk/dsh-mac-pet")!)
                         Divider().opacity(0.45)
-                        AboutLinkRow(title: "反馈问题", detail: "提交问题与改进建议", icon: "bubble.left", url: URL(string: "https://github.com/sundusk/dsh-pet/issues")!)
+                        AboutLinkRow(title: "反馈问题", detail: "提交问题与改进建议", icon: "bubble.left", url: URL(string: "https://github.com/sundusk/dsh-mac-pet/issues")!)
                     }
                 }
                 .frame(width: 290)

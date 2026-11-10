@@ -21,7 +21,7 @@ function runPluginProbe(inventory, queryFails = false) {
     encoding: 'utf8',
     env: {
       ...process.env,
-      PLUGIN_NAME: '@sundusk/dsh-pet',
+      PLUGIN_NAME: 'dsh-mac-pet',
       LEGACY_PLUGIN_NAME: '@sundusk/dsh-moodball-status',
       PLUGIN_PROFILE: 'web',
       PLUGIN_INVENTORY: inventory,
@@ -33,7 +33,7 @@ function runPluginProbe(inventory, queryFails = false) {
 }
 
 test('installer distinguishes current, legacy, absent, and unavailable plugin states', () => {
-  assert.equal(runPluginProbe('installed: @sundusk/dsh-pet'), 0)
+  assert.equal(runPluginProbe('installed: dsh-mac-pet'), 0)
   assert.equal(runPluginProbe('installed: @sundusk/dsh-moodball-status'), 3)
   assert.equal(runPluginProbe('installed: another-plugin'), 1)
   assert.equal(runPluginProbe('', true), 2)

@@ -1,6 +1,6 @@
 # DSH Pet 命令协议
 
-本文档描述 `@sundusk/dsh-pet` 与 DSH Pet.app 之间的本地协议。主通道是用户当前 macOS 账户下的 Unix Socket，插件拥有服务端，App 只连接和观察；协议不启动、停止或重启 DeepSeek Harness。会话跳转另有一个只传递 Session ID 的本地 HTTP 队列，不能创建、修改或提交任何 Agent 内容。
+本文档描述 `dsh-mac-pet` 与 DSH Pet.app 之间的本地协议。主通道是用户当前 macOS 账户下的 Unix Socket，插件拥有服务端，App 只连接和观察；协议不启动、停止或重启 DeepSeek Harness。会话跳转另有一个只传递 Session ID 的本地 HTTP 队列，不能创建、修改或提交任何 Agent 内容。
 
 ## Socket
 

@@ -25,7 +25,7 @@ test('browser half polls pending opens, navigates the workspace, and acknowledge
   }
   try {
     vm.runInThisContext(code, { filename: 'client.js' })
-    assert.equal(registration.id, '@sundusk/dsh-pet')
+    assert.equal(registration.id, 'dsh-mac-pet')
     const exports = registration.factory(() => { throw new Error('client must not require modules') })
     assert.deepEqual(exports.inject, ['uiWorkspace'])
 

@@ -11,14 +11,14 @@
 # =============================================================================
 set -euo pipefail
 
-PLUGIN_SPEC="github:sundusk/dsh-pet"
-PLUGIN_NAME="@sundusk/dsh-pet"
+PLUGIN_SPEC="dsh-mac-pet"
+PLUGIN_NAME="dsh-mac-pet"
 LEGACY_PLUGIN_NAME="@sundusk/dsh-moodball-status"
 PLUGIN_PROFILE="web"
 STATUS_URL="${DSH_PET_STATUS_URL:-${MOODBALL_STATUS_URL:-http://127.0.0.1:3080/api/dsh-pet/status}}"
 SOCKET_PATH="${DSH_PET_SOCKET_PATH:-${MOODBALL_SOCKET_PATH:-$HOME/Library/Application Support/DSH Pet/dsh-pet.sock}}"
 APP_SRC="dist/DSH Pet.app"
-RELEASE_URL="https://github.com/sundusk/dsh-pet/releases/latest/download/DSH-Pet.app.zip"
+RELEASE_URL="https://github.com/sundusk/dsh-mac-pet/releases/latest/download/DSH-Pet.app.zip"
 CONFIG_PATH="$HOME/Library/Application Support/DSH Pet/config.json"
 LEGACY_CONFIG_PATH="$HOME/Library/Application Support/MoodBall/config.json"
 
@@ -749,7 +749,7 @@ if [ "$HARNESS_TYPE" = "source" ] || [ "$HARNESS_TYPE" = "npm" ]; then
                 ;;
             3)
                 PLUGIN_STATE="legacy"
-                warn "检测到旧版桥接插件；请更新 github:sundusk/dsh-pet 并重启 Harness。"
+                warn "检测到旧版桥接插件；请安装 dsh-mac-pet 并重启 Harness。"
                 ;;
             *)
                 PLUGIN_STATE="unknown"
@@ -888,7 +888,7 @@ case "$PLUGIN_STATE" in
         ;;
     legacy)
         echo "  ⚠ 检测到旧版插件，请移除 @sundusk/dsh-moodball-status，"
-        echo "    再安装 github:sundusk/dsh-pet 并重启 Harness。"
+        echo "    再安装 dsh-mac-pet 并重启 Harness。"
         ;;
     unknown)
         echo "  ⚠ 暂时无法确认状态插件是否已连接。"

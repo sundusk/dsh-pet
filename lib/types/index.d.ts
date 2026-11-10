@@ -1,11 +1,11 @@
 /**
- * dsh-pet host plugin — a Harness status bridge (no rendered browser UI, no
+ * dsh-mac-pet host plugin — a Harness status bridge (no rendered browser UI, no
  * settings namespace) that tracks agent activity, serves a stable snapshot over
  * HTTP and a local Unix socket, and queues Session-open requests for the tiny
  * browser half.
  * Install
- * via `dsh plugin --profile web add github:sundusk/dsh-pet`.
- * @module @sundusk/dsh-pet
+ * via `dsh plugin --profile web add dsh-mac-pet`.
+ * @module dsh-mac-pet
  */
 import { Context } from '@deepseek-ai/cordis';
 export { CommandBridge } from './CommandBridge.js';

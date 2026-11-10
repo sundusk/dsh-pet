@@ -1,7 +1,7 @@
-# dsh-pet bundle patch: inserts the host-only plugin row into the
+# dsh-mac-pet bundle patch: inserts the host-only plugin row into the
 # web profile roster. Applied as a profile bundle layer (the `dsh.bundle.patch`
 # manifest field); install with
-# `dsh plugin --profile web add github:sundusk/dsh-pet`.
+# `dsh plugin --profile web add dsh-mac-pet`.
 #
 # The row is a bare plugin by package name: the node half (exports ".") tracks
 # agent activity and serves /api/dsh-pet/status plus the session-open queue.
@@ -10,4 +10,4 @@
 # needs no settings namespace.
 - insert:
     - id: dsh-pet
-      name: '@sundusk/dsh-pet'
+      name: 'dsh-mac-pet'
