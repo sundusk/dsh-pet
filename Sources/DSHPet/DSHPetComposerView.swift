@@ -21,7 +21,9 @@ struct DSHPetComposerView: View {
     static let composerInputMinimumHeight: CGFloat = 38
 
     static func expandedComposerHeight(inputHeight: CGFloat, showsStatusLine: Bool) -> CGFloat {
-        (showsStatusLine ? 125 : 106) + inputHeight - composerInputMinimumHeight
+        // Generous enough for a two-line submission/error row while still
+        // scaling with the measured input height.
+        (showsStatusLine ? 138 : 110) + inputHeight - composerInputMinimumHeight
     }
 
     var body: some View {
@@ -119,6 +121,26 @@ struct DSHPetComposerView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+    }
+
+    private func submissionStatusRow(_ message: String, canDiscard: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(message)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Spacer(minLength: 2)
+            if canDiscard {
+                Button("丢弃") {
+                    command.discardPendingSubmission()
+                }
+                .buttonStyle(.link)
+                .font(.system(size: 10, weight: .medium))
+                .help("丢弃这条未确认消息；未修改且无附件的草稿会一并清空。如果消息已送达，重发可能重复")
+                .accessibilityLabel("丢弃未确认消息")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var expandedComposer: some View {
@@ -251,15 +273,9 @@ struct DSHPetComposerView: View {
             }
 
             if command.submissionStatus == .unconfirmed {
-                Text("提交结果未确认，请在 Harness 中检查")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                submissionStatusRow("提交结果未确认，请在 Harness 中检查", canDiscard: command.hasPendingSubmission)
             } else if case .failed(let message) = command.submissionStatus {
-                Text(message)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                submissionStatusRow(message, canDiscard: command.hasPendingSubmission)
             } else if command.connection != .connected || !command.capabilitiesAvailable {
                 Text("输入服务未连接，请确认 DSH Pet 桥接插件已加载")
                     .font(.system(size: 10))
@@ -539,15 +555,25 @@ struct DSHPetInputToken: Equatable {
     let query: String
     let range: NSRange
 
+    // Compiled once; find() runs on every keystroke and selection change.
+    private static let patterns: [(expression: NSRegularExpression, kind: DSHPetCandidateKind)] = [
+        (#"(?:^|\s)(@\"([^\"]*))$"#, .file),
+        (#"(?:^|\s)(@([^\s\"]*))$"#, .file),
+        (#"(?:^|\s)(\$([^\s]*))$"#, .skill),
+    ].compactMap { pattern, kind in
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+        return (expression, kind)
+    }
+
     static func find(in text: String, selection: NSRange) -> DSHPetInputToken? {
         let source = text as NSString
         guard selection.length == 0, selection.location <= source.length else { return nil }
         let prefix = source.substring(to: selection.location) as NSString
-        let patterns = [#"(?:^|\s)(@\"([^\"]*))$"#, #"(?:^|\s)(@([^\s\"]*))$"#, #"(?:^|\s)(\$([^\s]*))$"#]
-        for (index, pattern) in patterns.enumerated() {
-            guard let expression = try? NSRegularExpression(pattern: pattern),
-                  let match = expression.firstMatch(in: prefix as String, range: NSRange(location: 0, length: prefix.length)) else { continue }
-            return DSHPetInputToken(kind: index == 2 ? .skill : .file, query: prefix.substring(with: match.range(at: 2)), range: match.range(at: 1))
+        for (expression, kind) in Self.patterns {
+            guard let match = expression.firstMatch(in: prefix as String, range: NSRange(location: 0, length: prefix.length)) else {
+                continue
+            }
+            return DSHPetInputToken(kind: kind, query: prefix.substring(with: match.range(at: 2)), range: match.range(at: 1))
         }
         return nil
     }

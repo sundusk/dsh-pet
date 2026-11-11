@@ -21,18 +21,11 @@ export interface MoodBridgePayload {
  * latest snapshot immediately, then one JSON object per line on change.
  */
 export declare class LocalStateBridge {
-    static defaultPath: string;
-    private readonly socketPath;
     private readonly readSnapshot;
-    private server;
+    private readonly socketServer;
     private clients;
-    private ownsSocket;
-    private probeGeneration;
-    private probing;
-    private socketIdentity;
-    constructor(readSnapshot: () => MoodBridgePayload, socketPath?: string);
+    constructor(readSnapshot: () => MoodBridgePayload, socketPath: string);
     start(onReady?: () => void): void;
-    private listen;
     publish(): void;
     stop(): void;
     private write;

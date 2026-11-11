@@ -42,10 +42,19 @@ struct DSHPetBubblePresentation: Equatable {
     let pageNumber: Int?
     let stackDepth: Int
     let interactive: Bool
-    /// Session represented by this page; aggregate and legacy bubbles are nil.
+    /// Session represented by this page; aggregate bubbles are nil.
     let taskID: String?
 
     var isMulti: Bool { style != .single }
+
+    var doubleTapAction: DSHPetBubbleDoubleTapAction {
+        taskID.map(DSHPetBubbleDoubleTapAction.openTask) ?? .openHarness
+    }
+}
+
+enum DSHPetBubbleDoubleTapAction: Equatable {
+    case openTask(String)
+    case openHarness
 }
 
 /// The pages the pet can cycle through. With one task the deck keeps the

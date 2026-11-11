@@ -10,11 +10,9 @@ final class HarnessConnectionManagerTests: XCTestCase {
         defer { fixture.cleanup() }
         let manager = HarnessConnectionManager(directory: fixture.directory, defaults: fixture.defaults)
         manager.refresh()
-        XCTAssertTrue(manager.allowsLegacyFallback)
         let first = try fixture.add("first", kind: .desktop, targetID: "desktop-a")
         manager.refresh()
         XCTAssertEqual(manager.effectiveInstance?.id, first.id)
-        XCTAssertFalse(manager.allowsLegacyFallback)
 
         let other = try fixture.add("other", kind: .web, targetID: "web-b")
         manager.refresh()
@@ -25,11 +23,9 @@ final class HarnessConnectionManagerTests: XCTestCase {
         XCTAssertTrue(manager.message?.contains("不会自动改连") == true)
         try fixture.remove(other.id)
         manager.refresh()
-        XCTAssertFalse(manager.allowsLegacyFallback)
         let reopened = HarnessConnectionManager(directory: fixture.directory, defaults: fixture.defaults)
         reopened.refresh()
         XCTAssertNil(reopened.effectiveInstance)
-        XCTAssertFalse(reopened.allowsLegacyFallback)
 
         let restarted = try fixture.add("restarted", kind: .desktop, targetID: "desktop-a")
         manager.refresh()

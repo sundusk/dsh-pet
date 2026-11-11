@@ -218,61 +218,68 @@ struct DSHPetTaskPanelView: View {
     }
 
     private func detail(_ task: DSHPetTaskSummary) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(task.title)
-                .font(.system(size: 14, weight: .semibold))
-                .lineLimit(2)
+        VStack(alignment: .leading, spacing: 10) {
+            // Long messages and previews scroll instead of being clipped by
+            // the fixed task-panel height; the actions stay pinned below.
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(task.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(2)
 
-            HStack(spacing: 6) {
-                Image(systemName: task.statusIcon)
-                Text(task.statusLabel)
-                    .fontWeight(.medium)
-                Text("· 更新于")
-                Text(Date(timeIntervalSince1970: task.updatedAt / 1000), style: .relative)
-            }
-            .font(.system(size: 10))
-            .foregroundStyle(.secondary)
-
-            if let workspace = command.workspaceTitle(for: task), !workspace.isEmpty {
-                Label(workspace, systemImage: "folder")
+                    HStack(spacing: 6) {
+                        Image(systemName: task.statusIcon)
+                        Text(task.statusLabel)
+                            .fontWeight(.medium)
+                        Text("· 更新于")
+                        Text(Date(timeIntervalSince1970: task.updatedAt / 1000), style: .relative)
+                    }
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
 
-            if let message = task.message, !message.isEmpty {
-                Text(message)
-                    .font(.system(size: 11))
+                    if let workspace = command.workspaceTitle(for: task), !workspace.isEmpty {
+                        Label(workspace, systemImage: "folder")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    if let message = task.message, !message.isEmpty {
+                        Text(message)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("最后一轮回复")
+                            .font(.system(size: 10, weight: .medium))
+                        Text(command.taskPreview ?? command.taskPreviewStatus ?? "暂无回复预览")
+                            .font(.system(size: 11))
+                            .lineLimit(3)
+                            .textSelection(.enabled)
+                    }
                     .foregroundStyle(.secondary)
-                    .lineLimit(6)
                     .frame(maxWidth: .infinity, alignment: .leading)
-            }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("最后一轮回复")
-                    .font(.system(size: 10, weight: .medium))
-                Text(command.taskPreview ?? command.taskPreviewStatus ?? "暂无回复预览")
-                    .font(.system(size: 11))
-                    .lineLimit(3)
-                    .textSelection(.enabled)
-            }
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
+                    if let warning = command.continuationWarning {
+                        Text(warning)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.orange)
+                    }
 
-            if let warning = command.continuationWarning {
-                Text(warning)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.orange)
+                    if let error = command.taskOpenError {
+                        Text(error)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.orange)
+                            .lineLimit(2)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.hidden)
 
-            if let error = command.taskOpenError {
-                Text(error)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.orange)
-                    .lineLimit(2)
-            }
-
-            Spacer()
             HStack(spacing: 12) {
                 Button("继续此会话") {
                     if model.continueTask(task) {

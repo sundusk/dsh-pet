@@ -57,9 +57,7 @@ struct DSHPetBubbleDeckView: View {
 
     private var tapGesture: some Gesture {
         TapGesture(count: 2)
-            .onEnded {
-                if presentation.taskID != nil { onDoubleTap() }
-            }
+            .onEnded { onDoubleTap() }
             .exclusively(before: TapGesture(count: 1).onEnded {
                 if presentation.interactive { onTap() }
             })
@@ -98,15 +96,12 @@ struct DSHPetBubbleDeckView: View {
         var parts = [presentation.title]
         if let pageNumber = presentation.pageNumber { parts.append("第 \(pageNumber) 页") }
         if presentation.interactive { parts.append("点击切换") }
-        if presentation.taskID != nil { parts.append("双击打开 Harness 会话") }
+        parts.append(presentation.taskID != nil ? "双击打开 Harness 会话" : "双击打开 Harness")
         return parts.joined(separator: "，")
     }
 
     private var helpText: String {
-        if presentation.taskID != nil && presentation.interactive {
-            return "单击切换任务气泡，双击打开 Harness 会话"
-        }
-        if presentation.taskID != nil { return "双击打开 Harness 会话" }
-        return presentation.interactive ? "点击切换任务气泡" : ""
+        let doubleTap = presentation.taskID != nil ? "双击打开 Harness 会话" : "双击打开 Harness"
+        return presentation.interactive ? "单击切换任务气泡，\(doubleTap)" : doubleTap
     }
 }

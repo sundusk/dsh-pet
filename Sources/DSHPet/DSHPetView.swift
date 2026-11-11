@@ -11,11 +11,11 @@ import SwiftUI
 /// 非空闲状态时，在球脑门上方显示漫画风说话气泡（中文状态提醒），空闲时隐藏。
 /// 宠物底部锚定：面板随皮肤、发光和气泡调整大小，宠物脚底的屏幕位置保持不变。
 ///
-/// 状态来源：只消费 `DSHPetModel`（由 `AppCoordinator.activityState` 派生），
+/// 状态来源：只消费 `DSHPetModel`（由 `MoodBridge` / `DSHPetCommandClient` 派生），
 /// 不接触任何 wire 事件 / DOM（规格 9 / 23）。
 struct DSHPetView: View {
     @ObservedObject var model: DSHPetModel
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     let onOpenHarness: () -> Void
 
     /// 按下时鼠标与窗口原点的偏移（全局坐标），拖拽中保持不变
@@ -123,7 +123,15 @@ struct DSHPetView: View {
                         presentation: bubble,
                         color: model.color,
                         onTap: { model.advanceBubble() },
-                        onDoubleTap: { model.openBubbleTask() }
+                        onDoubleTap: {
+                            // Task pages open their Session; the aggregate and
+                            // aggregate pages keep the original "open Harness".
+                            if model.bubblePresentation?.taskID != nil {
+                                model.openBubbleTask()
+                            } else {
+                                onOpenHarness()
+                            }
+                        }
                     )
                     .offset(y: bubbleOffsetY)
                     .transition(.scale(scale: 0.8, anchor: .bottom).combined(with: .opacity))
@@ -192,13 +200,23 @@ struct DSHPetView: View {
                     .blendMode(.screen)
 
                 if settings.showEyes {
+                    // The stopped ball is pure black; dark eyes would vanish.
+                    let eyeFill = StatusBallAppearance.eyeColor(for: model.mood, configured: settings.eyeColor.color)
                     ForEach([-CGFloat(1), CGFloat(1)], id: \.self) { direction in
                         Ellipse()
-                            .fill(settings.eyeColor.color)
+                            .fill(eyeFill)
                             .frame(width: d * 0.10, height: d * 0.183)
                             .offset(x: direction * d * 0.117)
                             .scaleEffect(x: 1, y: eyeScale, anchor: .center)
                     }
+                }
+
+                if StatusBallAppearance.showsStoppedRing(for: model.mood) {
+                    // Keep the black stopped ball readable, matching the
+                    // standalone state preview/export rendering.
+                    Circle()
+                        .strokeBorder(Color.white.opacity(0.30), lineWidth: 2)
+                        .frame(width: d + 6, height: d + 6)
                 }
             }
             .drawingGroup()

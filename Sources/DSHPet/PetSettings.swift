@@ -23,6 +23,19 @@ let moodColorConfigs: [MoodColorConfig] = [
 
 let disconnectedHex: UInt32 = 0x9ca3af
 
+/// Shared rendering rule for the stopped status ball. The ball is pure black,
+/// so dark configured eyes would disappear; the preview, export and live pet
+/// must all use the same substitute.
+enum StatusBallAppearance {
+    static func eyeColor(for mood: String, configured: Color) -> Color {
+        mood == "stopped" ? .white : configured
+    }
+
+    static func showsStoppedRing(for mood: String) -> Bool {
+        mood == "stopped"
+    }
+}
+
 // MARK: - 桌宠类型与通用设置
 
 enum FloatingPetSkin: RawRepresentable, CaseIterable, Identifiable, Hashable {
@@ -41,7 +54,7 @@ enum FloatingPetSkin: RawRepresentable, CaseIterable, Identifiable, Hashable {
         case "jingyuniangQ": self = .jingyuniangQ
         case "xiaoyu": self = .xiaoyu
         case "xinzhizhu": self = .xinzhizhu
-        case "classic", "moodBall": self = .classic
+        case "classic": self = .classic
         default:
             guard rawValue.hasPrefix("custom:"),
                   let id = UUID(uuidString: String(rawValue.dropFirst(7))) else { return nil }
@@ -162,8 +175,7 @@ extension Color {
     }
 }
 
-/// Shared pet settings. New values live under `dsh-pet.*`; old `settings.*`
-/// values are read as a compatibility fallback.
+/// Shared pet settings, persisted under the `dsh-pet.*` namespace.
 @MainActor
 final class PetSettings: ObservableObject {
     static let shared = PetSettings()
@@ -174,9 +186,6 @@ final class PetSettings: ObservableObject {
         static let skin = "dsh-pet.skin"
         static let ballSize = "dsh-pet.ballSize"
         static let breathingSpeed = "dsh-pet.breathingSpeed"
-        static let apiBase = "dsh-pet.apiBase"
-        static let pollInterval = "dsh-pet.pollInterval"
-        static let requestTimeout = "dsh-pet.requestTimeout"
         static let clickThrough = "dsh-pet.clickThrough"
         static let rememberPosition = "dsh-pet.rememberPosition"
         static let showEyes = "dsh-pet.showEyes"
@@ -185,33 +194,11 @@ final class PetSettings: ObservableObject {
         static let glowEnabled = "dsh-pet.glowEnabled"
         static let lockPosition = "dsh-pet.lockPosition"
         static let isPetVisible = "dsh-pet.isPetVisible"
-        static let positionX = "dsh-pet.ballPositionX"
-        static let positionY = "dsh-pet.ballPositionY"
         static let globalHotKeyEnabled = "dsh-pet.globalHotKeyEnabled"
         static let globalHotKeyKeyCode = "dsh-pet.globalHotKeyKeyCode"
         static let globalHotKeyModifiers = "dsh-pet.globalHotKeyModifiers"
         static let shortcutPrefix = "dsh-pet.shortcut."
         static let moodColorPrefix = "dsh-pet.moodColor."
-    }
-
-    private enum LegacyKey {
-        // This key was renamed from moodball.isBallVisible during namespace migration.
-        static let isBallVisible = "dsh-pet.isBallVisible"
-        static let ballSize = "settings.ballSize"
-        static let breathingSpeed = "settings.breathingSpeed"
-        static let apiBase = "settings.apiBase"
-        static let pollInterval = "settings.pollInterval"
-        static let requestTimeout = "settings.requestTimeout"
-        static let clickThrough = "settings.clickThrough"
-        static let rememberPosition = "settings.rememberPosition"
-        static let showEyes = "settings.showEyes"
-        static let eyeColor = "settings.eyeColor"
-        static let showStatusBubble = "settings.showStatusBubble"
-        static let glowEnabled = "settings.glowEnabled"
-        static let lockPosition = "settings.lockPosition"
-        static let positionX = "ballPositionX"
-        static let positionY = "ballPositionY"
-        static let moodColorPrefix = "settings.moodColor."
     }
 
     @Published var skin: FloatingPetSkin {
@@ -250,18 +237,6 @@ final class PetSettings: ObservableObject {
         didSet { defaults.set(eyeColor.rawValue, forKey: Key.eyeColor) }
     }
 
-    @Published var apiBase: String {
-        didSet { defaults.set(apiBase, forKey: Key.apiBase) }
-    }
-
-    @Published var pollInterval: Double {
-        didSet { defaults.set(pollInterval, forKey: Key.pollInterval) }
-    }
-
-    @Published var requestTimeout: Double {
-        didSet { defaults.set(requestTimeout, forKey: Key.requestTimeout) }
-    }
-
     @Published var clickThroughMode: ClickThroughMode {
         didSet { defaults.set(clickThroughMode.rawValue, forKey: Key.clickThrough) }
     }
@@ -293,33 +268,12 @@ final class PetSettings: ObservableObject {
         didSet { writeColor(disconnectedColor, key: Key.moodColorPrefix + "disconnected") }
     }
 
-    var savedBallPosition: CGPoint? {
-        get {
-            guard let x = Self.number(defaults, for: Key.positionX, legacy: LegacyKey.positionX),
-                  let y = Self.number(defaults, for: Key.positionY, legacy: LegacyKey.positionY) else { return nil }
-            return CGPoint(x: x, y: y)
-        }
-        set {
-            if let newValue {
-                defaults.set(Double(newValue.x), forKey: Key.positionX)
-                defaults.set(Double(newValue.y), forKey: Key.positionY)
-            } else {
-                defaults.removeObject(forKey: Key.positionX)
-                defaults.removeObject(forKey: Key.positionY)
-            }
-        }
-    }
-
     var globalHotKeyConfiguration: GlobalHotKeyConfiguration {
         GlobalHotKeyConfiguration(
             isEnabled: globalHotKeyEnabled,
             keyCode: globalHotKeyKeyCode,
             modifiers: NSEvent.ModifierFlags(rawValue: globalHotKeyModifiers)
         )
-    }
-
-    var globalHotKeyDisplayName: String {
-        globalHotKeyConfiguration.displayName
     }
 
     func setGlobalHotKeyStatus(_ message: String?) {
@@ -377,7 +331,6 @@ final class PetSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard, petLibrary: CustomPetLibrary? = nil) {
         self.defaults = defaults
-        DSHPetMigration.migrate(in: defaults)
         let petLibrary = petLibrary ?? .shared
         let clamp = { (value: Double, lower: Double, upper: Double) in min(max(value, lower), upper) }
 
@@ -390,19 +343,16 @@ final class PetSettings: ObservableObject {
         if savedSkin != initialSkin.rawValue {
             defaults.set(initialSkin.rawValue, forKey: Key.skin)
         }
-        ballSize = CGFloat(clamp(Self.number(defaults, for: Key.ballSize, legacy: LegacyKey.ballSize) ?? 120, 60, 200))
-        breathingSpeed = clamp(Self.number(defaults, for: Key.breathingSpeed, legacy: LegacyKey.breathingSpeed) ?? 2, 0.5, 5)
-        apiBase = Self.string(defaults, for: Key.apiBase, legacy: LegacyKey.apiBase) ?? "http://127.0.0.1:3080"
-        pollInterval = clamp(Self.number(defaults, for: Key.pollInterval, legacy: LegacyKey.pollInterval) ?? 0.7, 0.3, 5)
-        requestTimeout = clamp(Self.number(defaults, for: Key.requestTimeout, legacy: LegacyKey.requestTimeout) ?? 2, 0.5, 5)
-        clickThroughMode = ClickThroughMode(rawValue: Self.string(defaults, for: Key.clickThrough, legacy: LegacyKey.clickThrough) ?? "") ?? .hover
-        rememberPosition = Self.bool(defaults, for: Key.rememberPosition, legacy: LegacyKey.rememberPosition) ?? true
+        ballSize = CGFloat(clamp(Self.number(defaults, for: Key.ballSize) ?? 120, 60, 200))
+        breathingSpeed = clamp(Self.number(defaults, for: Key.breathingSpeed) ?? 2, 0.5, 5)
+        clickThroughMode = ClickThroughMode(rawValue: Self.string(defaults, for: Key.clickThrough) ?? "") ?? .hover
+        rememberPosition = Self.bool(defaults, for: Key.rememberPosition) ?? true
         globalHotKeyEnabled = defaults.object(forKey: Key.globalHotKeyEnabled) == nil
             ? GlobalHotKeyConfiguration.default.isEnabled
             : defaults.bool(forKey: Key.globalHotKeyEnabled)
-        globalHotKeyKeyCode = UInt32(Self.number(defaults, for: Key.globalHotKeyKeyCode, legacy: Key.globalHotKeyKeyCode)
+        globalHotKeyKeyCode = UInt32(Self.number(defaults, for: Key.globalHotKeyKeyCode)
             ?? Double(GlobalHotKeyConfiguration.default.keyCode))
-        globalHotKeyModifiers = UInt(Self.number(defaults, for: Key.globalHotKeyModifiers, legacy: Key.globalHotKeyModifiers)
+        globalHotKeyModifiers = UInt(Self.number(defaults, for: Key.globalHotKeyModifiers)
             ?? Double(GlobalHotKeyConfiguration.default.modifiers.rawValue))
         globalHotKeyStatus = nil
 
@@ -414,30 +364,28 @@ final class PetSettings: ObservableObject {
                 isEnabled: defaults.object(forKey: prefix + ".enabled") == nil
                     ? defaultValue.isEnabled
                     : defaults.bool(forKey: prefix + ".enabled"),
-                keyCode: UInt32(Self.number(defaults, for: prefix + ".keyCode", legacy: prefix + ".keyCode")
+                keyCode: UInt32(Self.number(defaults, for: prefix + ".keyCode")
                     ?? Double(defaultValue.keyCode)),
                 modifiers: NSEvent.ModifierFlags(rawValue: UInt(Self.number(
                     defaults,
-                    for: prefix + ".modifiers",
-                    legacy: prefix + ".modifiers"
+                    for: prefix + ".modifiers"
                 ) ?? Double(defaultValue.modifiers.rawValue)))
             )
         }
         shortcuts = loadedShortcuts
 
-        showEyes = Self.bool(defaults, for: Key.showEyes, legacy: LegacyKey.showEyes) ?? true
-        eyeColor = EyeColor(rawValue: Self.string(defaults, for: Key.eyeColor, legacy: LegacyKey.eyeColor) ?? "") ?? .black
-        showStatusBubble = Self.bool(defaults, for: Key.showStatusBubble, legacy: LegacyKey.showStatusBubble) ?? true
-        glowEnabled = Self.bool(defaults, for: Key.glowEnabled, legacy: LegacyKey.glowEnabled) ?? true
-        lockPosition = Self.bool(defaults, for: Key.lockPosition, legacy: LegacyKey.lockPosition) ?? false
-        isPetVisible = Self.bool(defaults, for: Key.isPetVisible, legacy: LegacyKey.isBallVisible) ?? true
-        disconnectedColor = Color(hex: Self.hex(defaults, for: Key.moodColorPrefix + "disconnected", legacy: LegacyKey.moodColorPrefix + "disconnected") ?? disconnectedHex)
+        showEyes = Self.bool(defaults, for: Key.showEyes) ?? true
+        eyeColor = EyeColor(rawValue: Self.string(defaults, for: Key.eyeColor) ?? "") ?? .black
+        showStatusBubble = Self.bool(defaults, for: Key.showStatusBubble) ?? true
+        glowEnabled = Self.bool(defaults, for: Key.glowEnabled) ?? true
+        lockPosition = Self.bool(defaults, for: Key.lockPosition) ?? false
+        isPetVisible = Self.bool(defaults, for: Key.isPetVisible) ?? true
+        disconnectedColor = Color(hex: Self.hex(defaults, for: Key.moodColorPrefix + "disconnected") ?? disconnectedHex)
 
         var colors: [String: Color] = [:]
         for config in moodColorConfigs {
             let key = Key.moodColorPrefix + config.mood
-            let legacy = LegacyKey.moodColorPrefix + config.mood
-            colors[config.mood] = Color(hex: Self.hex(defaults, for: key, legacy: legacy) ?? config.defaultHex)
+            colors[config.mood] = Color(hex: Self.hex(defaults, for: key) ?? config.defaultHex)
         }
         moodColors = colors
     }
@@ -458,36 +406,27 @@ final class PetSettings: ObservableObject {
         defaults.removeObject(forKey: Key.moodColorPrefix + "disconnected")
     }
 
-    func resetPositionRequested() {
-        NotificationCenter.default.post(name: .waterballResetPosition, object: nil)
-    }
-
-    private static func storedValue(_ defaults: UserDefaults, for key: String, legacy: String) -> Any? {
-        defaults.object(forKey: key) ?? defaults.object(forKey: legacy)
-    }
-
-    private static func number(_ defaults: UserDefaults, for key: String, legacy: String) -> Double? {
-        if let number = storedValue(defaults, for: key, legacy: legacy) as? NSNumber { return number.doubleValue }
-        if let string = storedValue(defaults, for: key, legacy: legacy) as? String { return Double(string) }
+    private static func number(_ defaults: UserDefaults, for key: String) -> Double? {
+        if let number = defaults.object(forKey: key) as? NSNumber { return number.doubleValue }
+        if let string = defaults.object(forKey: key) as? String { return Double(string) }
         return nil
     }
 
-    private static func string(_ defaults: UserDefaults, for key: String, legacy: String) -> String? {
-        if let string = storedValue(defaults, for: key, legacy: legacy) as? String { return string }
-        if let number = storedValue(defaults, for: key, legacy: legacy) as? NSNumber { return number.stringValue }
+    private static func string(_ defaults: UserDefaults, for key: String) -> String? {
+        if let string = defaults.object(forKey: key) as? String { return string }
+        if let number = defaults.object(forKey: key) as? NSNumber { return number.stringValue }
         return nil
     }
 
-    private static func bool(_ defaults: UserDefaults, for key: String, legacy: String) -> Bool? {
-        guard storedValue(defaults, for: key, legacy: legacy) != nil else { return nil }
-        return defaults.bool(forKey: defaults.object(forKey: key) != nil ? key : legacy)
+    private static func bool(_ defaults: UserDefaults, for key: String) -> Bool? {
+        defaults.object(forKey: key) == nil ? nil : defaults.bool(forKey: key)
     }
 
-    private static func hex(_ defaults: UserDefaults, for key: String, legacy: String) -> UInt32? {
-        if let string = defaults.object(forKey: key) as? String ?? defaults.object(forKey: legacy) as? String {
+    private static func hex(_ defaults: UserDefaults, for key: String) -> UInt32? {
+        if let string = defaults.object(forKey: key) as? String {
             return UInt32(string, radix: 16)
         }
-        if let number = defaults.object(forKey: key) as? NSNumber ?? defaults.object(forKey: legacy) as? NSNumber {
+        if let number = defaults.object(forKey: key) as? NSNumber {
             return number.uint32Value
         }
         return nil
@@ -498,12 +437,8 @@ final class PetSettings: ObservableObject {
     }
 }
 
-/// Compatibility name retained while downstream source adopts `PetSettings`.
-typealias SettingsStore = PetSettings
-
 extension Notification.Name {
-    static let waterballResetPosition = Notification.Name("waterballResetPosition")
-    static let waterballToggleSettings = Notification.Name("waterballToggleSettings")
+    static let dshPetResetPosition = Notification.Name("dshPetResetPosition")
 }
 
 func colorToHex(_ color: Color) -> UInt32 {

@@ -107,6 +107,14 @@ final class LocalSocketTransportTests: XCTestCase {
         DispatchQueue.global().async {
             let client = Darwin.accept(descriptor, nil, nil)
             guard client >= 0 else { return }
+            var noSigPipe: Int32 = 1
+            _ = setsockopt(
+                client,
+                SOL_SOCKET,
+                SO_NOSIGPIPE,
+                &noSigPipe,
+                socklen_t(MemoryLayout<Int32>.size)
+            )
             let bytesToWrite = Array(payload.utf8)
             bytesToWrite.withUnsafeBytes { bytes in
                 _ = Darwin.write(client, bytes.baseAddress, bytes.count)

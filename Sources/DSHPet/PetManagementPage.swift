@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Settings page for importing and maintaining Codex v2 pet packages.
 struct PetManagementPage: View {
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     @ObservedObject var library: CustomPetLibrary
 
     @State private var pendingPackage: PendingPackage?
@@ -158,7 +158,7 @@ struct PetManagementPage: View {
             }
             .frame(maxWidth: .infinity, minHeight: 250)
             .padding(14)
-            .background(Color(red: 0.95, green: 0.955, blue: 0.965), in: RoundedRectangle(cornerRadius: 10))
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
         }
     }
 
@@ -321,8 +321,8 @@ private struct PetPackagePreview: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: XiaoyuAnimation.renderInterval, paused: reduceMotion)) { timeline in
-            let animation = mood == "wave" ? XiaoyuAnimation.wave : XiaoyuAnimation.animation(for: mood)
+        let animation = mood == "wave" ? XiaoyuAnimation.wave : XiaoyuAnimation.animation(for: mood)
+        TimelineView(.animation(minimumInterval: animation.minimumFrameInterval, paused: reduceMotion)) { timeline in
             if let frame = atlas.frame(for: animation, elapsed: reduceMotion ? 0 : timeline.date.timeIntervalSince(startedAt)) {
                 Image(decorative: frame, scale: 1, orientation: .up)
                     .resizable()

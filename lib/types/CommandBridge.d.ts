@@ -105,20 +105,14 @@ export interface CommandHandlers {
  * to one selected session without mixing command responses into that stream.
  */
 export declare class CommandBridge {
-    static defaultPath: string;
-    private readonly socketPath;
     private readonly handlers;
     private readonly instance;
     private readonly maxCommandBytes;
-    private server;
-    private ownsSocket;
+    private readonly socketServer;
     private clients;
-    private probeGeneration;
-    private probing;
-    private socketIdentity;
-    constructor(handlers: CommandHandlers, socketPath?: string, instance?: HarnessInstanceDescriptor);
+    constructor(handlers: CommandHandlers, socketPath: string, instance?: HarnessInstanceDescriptor);
     start(onReady?: () => void): void;
-    private listen;
+    private attachClient;
     /** Push a replacement snapshot to clients subscribed to this session. */
     publish(sessionId: string, snapshot: MoodBridgePayload): void;
     /** Push a replacement task projection to clients that requested task updates. */

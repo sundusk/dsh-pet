@@ -5,10 +5,10 @@ import UniformTypeIdentifiers
 /// Settings-only preview; pet and state selections never change the running pet.
 struct StatePreviewSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     @ObservedObject private var petLibrary = CustomPetLibrary.shared
 
-    /// 展示用状态列表（与 README 颜色含义一致；waving 是网页交互态，桌面球不含）
+    /// 展示用状态列表（与 README 颜色含义一致）
     private static let states: [(mood: String, label: String)] = [
         ("idle", "空闲"),
         ("waiting", "正在思考中"),
@@ -28,7 +28,7 @@ struct StatePreviewSheet: View {
     /// 导出 PNG 的反馈信息
     @State private var exportMessage: String?
 
-    init(settings: SettingsStore, skin: FloatingPetSkin, mood: String) {
+    init(settings: PetSettings, skin: FloatingPetSkin, mood: String) {
         self.settings = settings
         _selectedMood = State(initialValue: mood)
         _selectedSkin = State(initialValue: skin)
@@ -118,7 +118,7 @@ struct StatePreviewSheet: View {
 
             // 桌宠展示区：可选气泡文字
             ZStack {
-                Color.black.opacity(0.05)
+                Color.primary.opacity(0.05)
                 PetWithBubble(settings: settings, skin: selectedSkin, mood: selectedMood, color: selectedColor, size: 130, text: previewBubbleText)
             }
             .frame(maxWidth: .infinity)
@@ -175,14 +175,13 @@ struct StatePreviewSheet: View {
         }
         .padding(24)
         .frame(width: 500)
-        .preferredColorScheme(.light)
     }
 }
 
 /// 桌宠 + 可选气泡的组合。
 /// 预览（130px）与导出 PNG（280px）共用，保证所见即所存。
 private struct PetWithBubble: View {
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     let skin: FloatingPetSkin
     let mood: String
     let color: Color
@@ -216,7 +215,7 @@ private struct PetWithBubble: View {
 /// 状态展示用的小球：与真实桌面球一致的渲染
 /// （外发光 + 渐变球体 + 高光 + 眼睛 + stopped 白环），静态满状态、无气泡文字。
 struct StateBallPreview: View {
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     let mood: String
     let color: Color
     let size: CGFloat
@@ -224,20 +223,22 @@ struct StateBallPreview: View {
     var body: some View {
         let d = size
         ZStack {
-            // 外发光（与主球一致：多 stop 渐变模拟柔边，不用 blur 滤镜）
-            Circle()
-                .fill(RadialGradient(
-                    stops: [
-                        .init(color: color.opacity(0.60), location: 0),
-                        .init(color: color.opacity(0.30), location: 0.45),
-                        .init(color: color.opacity(0.08), location: 0.75),
-                        .init(color: color.opacity(0.0), location: 1.0),
-                    ],
-                    center: .center,
-                    startRadius: 0,
-                    endRadius: d * 0.85
-                ))
-                .frame(width: d * 1.7, height: d * 1.7)
+            // 外发光（与主球一致：受“桌宠发光”开关控制，不用 blur 滤镜）
+            if settings.glowEnabled {
+                Circle()
+                    .fill(RadialGradient(
+                        stops: [
+                            .init(color: color.opacity(0.60), location: 0),
+                            .init(color: color.opacity(0.30), location: 0.45),
+                            .init(color: color.opacity(0.08), location: 0.75),
+                            .init(color: color.opacity(0.0), location: 1.0),
+                        ],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: d * 0.85
+                    ))
+                    .frame(width: d * 1.7, height: d * 1.7)
+            }
 
             // 球体本体
             Circle()
@@ -248,7 +249,10 @@ struct StateBallPreview: View {
                     endRadius: d
                 ))
                 .frame(width: d, height: d)
-                .shadow(color: color.opacity(0.8), radius: d * 0.16)
+                .shadow(
+                    color: settings.glowEnabled ? color.opacity(0.8) : .clear,
+                    radius: d * 0.16
+                )
 
             // 左上高光
             Circle()
@@ -262,7 +266,7 @@ struct StateBallPreview: View {
                 .blendMode(.screen)
 
             // 眼睛（跟随设置：开关/颜色）；stopped 是黑球，黑眼会不可见 → 用白眼
-            let eyeFill = mood == "stopped" ? Color.white : settings.eyeColor.color
+            let eyeFill = StatusBallAppearance.eyeColor(for: mood, configured: settings.eyeColor.color)
             if settings.showEyes {
                 Ellipse()
                     .fill(eyeFill)
@@ -275,7 +279,7 @@ struct StateBallPreview: View {
             }
 
             // stopped 是纯黑球，加一圈淡环便于辨认
-            if mood == "stopped" {
+            if StatusBallAppearance.showsStoppedRing(for: mood) {
                 Circle()
                     .strokeBorder(Color.white.opacity(0.30), lineWidth: 2)
                     .frame(width: d + 6, height: d + 6)

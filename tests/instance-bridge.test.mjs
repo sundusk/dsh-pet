@@ -13,6 +13,9 @@ import {
   LocalStateBridge,
   refreshHarnessInstanceWebURL,
 } from '../lib/index.js'
+import { clearAmbientHarnessEnv } from './ambient-env.mjs'
+
+clearAmbientHarnessEnv()
 
 const limits = {
   maxImageBytes: 20,
@@ -177,6 +180,25 @@ async function capabilities(socket) {
   return next()
 }
 
+test('socket creation restores the caller umask and keeps 0600 permissions', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-umask-'))
+  const socketPath = join(root, 'command.sock')
+  const originalUmask = process.umask()
+  process.umask(0o022)
+  const bridge = new CommandBridge(handlers('umask-test'), socketPath)
+  try {
+    bridge.start()
+    const socket = await waitForServer(socketPath)
+    assert.equal(process.umask(), 0o022)
+    assert.equal((await stat(socketPath)).mode & 0o777, 0o600)
+    socket.destroy()
+  } finally {
+    bridge.stop()
+    process.umask(originalUmask)
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('two instance bridges keep identities, sockets, and discovery manifests isolated', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-pet-instances-'))
   const discovery = join(root, 'instances')
@@ -228,10 +250,10 @@ test('two instance bridges keep identities, sockets, and discovery manifests iso
   }
 })
 
-test('a legacy active socket is never unlinked by a competing bridge stop', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-legacy-'))
+test('an active socket is never unlinked by a competing bridge stop', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-existing-'))
   const socketPath = join(root, 'dsh-pet-command.sock')
-  const first = new CommandBridge(handlers('legacy-owner'), socketPath)
+  const first = new CommandBridge(handlers('existing-owner'), socketPath)
   const contender = new CommandBridge(handlers('contender'), socketPath)
   try {
     first.start()
@@ -249,7 +271,7 @@ test('a legacy active socket is never unlinked by a competing bridge stop', asyn
   }
 })
 
-test('a legacy stale socket is reclaimed after a refused probe', async () => {
+test('a stale socket is reclaimed after a refused probe', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-pet-stale-'))
   const socketPath = join(root, 'dsh-pet-command.sock')
   const stale = createServer()

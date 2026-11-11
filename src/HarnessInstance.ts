@@ -63,7 +63,6 @@ export function createHarnessInstanceDescriptor(context?: unknown): HarnessInsta
   const resolvedProfile = readHint(hints, 'resolvedProfile')
   const profileValue = firstNonEmptyString(
     process.env.DSH_PET_PROFILE,
-    process.env.MOODBALL_PROFILE,
     process.env.DSH_PROFILE,
     profileContext?.name,
     readHint(hints, 'profile'),
@@ -73,9 +72,7 @@ export function createHarnessInstanceDescriptor(context?: unknown): HarnessInsta
   const profile = profileValue ?? profileName(resolvedProfile?.profile)
   const explicitKind = normalizeKind(firstNonEmptyString(
     process.env.DSH_PET_HARNESS_KIND,
-    process.env.MOODBALL_HARNESS_KIND,
     process.env.DSH_PET_HARNESS_TYPE,
-    process.env.MOODBALL_HARNESS_TYPE,
     readHint(hints, 'kind'),
     readHint(hints, 'type'),
     readServiceString(hints, 'harnessKind'),
@@ -95,7 +92,6 @@ export function createHarnessInstanceDescriptor(context?: unknown): HarnessInsta
 
   const webURL = safeLoopbackURL(
     process.env.DSH_PET_WEB_URL
-      ?? process.env.MOODBALL_WEB_URL
       ?? process.env.DSH_WEB_URL
       ?? contextOrigin(hints)
       ?? contextWebURL(hints),
@@ -229,7 +225,6 @@ function profileName(value: unknown): string | undefined {
 function targetIdentity(profile: string | undefined, context: HarnessContextHints | undefined): string | undefined {
   const explicit = firstNonEmptyString(
     process.env.DSH_PET_TARGET_ID,
-    process.env.MOODBALL_TARGET_ID,
     readServiceString(context, 'targetId'),
   )
   if (explicit !== undefined) return explicit

@@ -16,8 +16,8 @@ export type { HarnessInstanceDescriptor, HarnessInstanceKind } from './HarnessIn
 export declare const name = "dsh-pet";
 /** Services required before the status surface can mount. */
 export declare const inject: string[];
-/** The mood the desktop app renders (same vocabulary as the web water ball). */
-export type DshPetMood = 'idle' | 'waiting' | 'jumping' | 'done' | 'failed' | 'stopped' | 'waving' | 'authorizing' | 'questioning';
+/** The mood the desktop app renders. */
+export type DshPetMood = 'idle' | 'waiting' | 'jumping' | 'done' | 'failed' | 'stopped' | 'authorizing' | 'questioning';
 /**
  * Register the DSH Pet status surface: fold the agent session stream into a
  * stable snapshot, serve it over GET /api/dsh-pet/status, and broadcast the

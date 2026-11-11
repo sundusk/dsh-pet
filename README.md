@@ -28,12 +28,11 @@
 ### 项目组成
 
 - **DSH Pet.app**：以鲸鱼娘为默认形象的 macOS 桌宠应用，提供状态气泡、任务卡片与消息输入
-- **DSH Pet 桥接插件**（包名 `dsh-mac-pet`）：订阅 Agent 会话事件，提供 HTTP/状态 Socket 兼容接口、用户级命令 Socket，以及安装桌宠引导和桌宠会话跳转；无插件设置项
+- **DSH Pet 桥接插件**（包名 `dsh-mac-pet`）：订阅 Agent 会话事件，提供 HTTP/状态 Socket 接口、用户级命令 Socket，以及安装桌宠引导和桌宠会话跳转；无插件设置项
 
-旧名称和数据位置保留必要的兼容处理。安装脚本会清理旧版 `MoodBall.app`。
-当前源码对应的桌面 App 版本为 **v0.9.4**，桥接插件版本为 **v0.9.3**。已发布的 `DSH-Pet.app.zip` 安装包可从 [GitHub Releases](https://github.com/sundusk/dsh-mac-pet/releases/latest) 下载；安装脚本也会自动获取最新发布的安装包。
+桌面 App 与桥接插件共用同一版本号，取自 [package.json](package.json)；已发布的 `DSH-Pet.app.zip` 安装包可从 [GitHub Releases](https://github.com/sundusk/dsh-mac-pet/releases/latest) 下载，安装脚本也会自动获取最新发布的安装包。
 
-一切配置都在 app 的设置面板里完成。新版设置面板包含六个页面：「桌宠外观」「交互与提醒」「快捷键」「宠物管理」「Harness 连接」和「关于与更新」。
+一切配置都在 app 的设置面板里完成。设置面板包含六个页面：「桌宠外观」「交互与提醒」「快捷键」「宠物管理」「Harness 连接」和「关于与更新」。
 
 ### 鲸鱼娘动作
 
@@ -70,11 +69,11 @@ pnpm run build
 pnpm dsh web
 ```
 
-两种方式默认在 `http://127.0.0.1:3080` 打开 Web UI。已有 DeepSeek Harness 桌面版的用户也可以继续使用桌面版；其插件安装步骤见下文。加载新版 bridge 后，再从 DSH Pet 的「Harness 连接」页检测连接。
+两种方式默认在 `http://127.0.0.1:3080` 打开 Web UI。已有 DeepSeek Harness 桌面版的用户也可以继续使用桌面版；其插件安装步骤见下文。加载桥接插件后，再从 DSH Pet 的「Harness 连接」页检测连接。
 
 ### 安装 DSH Pet（推荐）
 
-如果已在 Harness 的「插件」页面安装并启用 `dsh-mac-pet`，未安装 App 或无法确认安装状态时，可从侧栏的「安装桌宠」进入下载和安装引导。安装 App 后，在 App 的「Harness 连接」页选择目标并检查连接；如果 Harness 提示需要重启，请等当前任务结束后再重启。
+如果已在 Harness 的「插件」页面安装并启用 `dsh-mac-pet`，未安装 App 或无法确认安装状态时，可从侧栏的「安装桌宠」进入下载和安装引导。安装状态检测有 45 秒缓存；点击「重新检测」会立即重新检测。安装 App 后，在 App 的「Harness 连接」页选择目标并检查连接；如果 Harness 提示需要重启，请等当前任务结束后再重启。
 
 也可以使用安装脚本。另开一个终端执行：
 
@@ -89,8 +88,8 @@ bash install.sh
 1. 检测当前正在运行的 Harness，并识别桌面版、NPM/NPX 版或源码版
 2. 源码版在实际源码根目录执行 `pnpm dsh`；NPM/NPX 版执行对应的 `dsh` 或 `npx @deepseek-ai/dsh` CLI
 3. CLI 版在目标 Harness 的 `web` profile 中检测/安装状态插件；桌面版通过应用内「插件」页面安装
-4. 下载最新 Release 中的 `DSH Pet.app`；如果当前目录已有 `dist/DSH Pet.app`，则优先使用本地构建产物
-5. 优先安装到 `/Applications`，无权限时自动回退到 `~/Applications` 并启动；安装后只保留一个 `DSH Pet.app`，旧版 `MoodBall.app` 和重复构建副本会移入废纸篓
+4. 下载最新 Release 中的 `DSH Pet.app`；如果仓库目录已有 `dist/DSH Pet.app`，则优先使用本地构建产物
+5. 优先安装到 `/Applications`，无权限时自动回退到 `~/Applications` 并启动；安装后只保留一个 `DSH Pet.app`，重复构建副本会移入废纸篓
 
 安装脚本只需要执行一次。若插件刚安装而当前 Harness 正在运行，脚本仍会继续安装并启动
 `DSH Pet.app`；请在当前任务完成后重启一次 DeepSeek Harness 让插件加载，**无需再次运行安装脚本**。
@@ -106,7 +105,7 @@ DSH_SOURCE_ROOT="$HOME/Projects/deepseek-harness" bash install.sh
 ```
 
 安装器会复用当前环境或已识别 Harness 的 `DSH_HOME`，并将最近使用的 Harness 类型、源码路径和 profile
-记录在 `~/Library/Application Support/DSH Pet/config.json`，供下一次安装使用；首次使用时也会读取旧位置的配置。
+记录在 `~/Library/Application Support/DSH Pet/config.json`，供下一次安装使用。
 
 如需自行构建，请先安装 Xcode 命令行工具，在本仓库运行 `DSH_PET_SKIP_OPEN=1 bash make-app.sh`，再运行 `bash install.sh`。
 
@@ -127,9 +126,7 @@ dsh plugin --profile web add dsh-mac-pet
 pnpm dsh plugin --profile web add dsh-mac-pet
 ```
 
-桌面版仍请使用其「插件」页面；官方内置 CLI 只有在完成初始化并退出桌面版后，才可管理 `desktop` profile；NPM/NPX CLI 只针对 `web` profile。加载新版 bridge 后，再回到 DSH Pet 的「Harness 连接」页重新检测。
-
-如果已安装旧包 `@sundusk/dsh-moodball-status`，请在对应 Harness 中移除旧包，再按上面的方式安装新版并重启 Harness。桌面版请在「插件」页面操作；源码版或 CLI 版可使用相应的 `dsh plugin --profile web remove @sundusk/dsh-moodball-status` 命令。
+桌面版仍请使用其「插件」页面；官方内置 CLI 只有在完成初始化并退出桌面版后，才可管理 `desktop` profile；NPM/NPX CLI 只针对 `web` profile。加载桥接插件后，再回到 DSH Pet 的「Harness 连接」页重新检测。
 
 ## ✨ 使用
 
@@ -170,10 +167,12 @@ pnpm dsh plugin --profile web add dsh-mac-pet
 宠物下方的短横条会在鼠标靠近时变成笔记按钮。点击后展开原生输入框：
 
 - 先在「Harness 连接」页选择目标，再选择该 Harness 已注册的工作区；DSH Pet 会记住当前目标。
+- 如果当前选中的工作区被移除，DSH Pet 会清除该工作区上的旧会话和订阅；只剩一个工作区时会自动选中它，但不会沿用旧会话。
 - Enter 发送，Shift+Enter 换行；中文输入法选字时 Enter 只确认候选文字。
 - 第一条消息创建 DSH Pet 专用会话，后续消息沿用同一会话；查询文件或技能时也可能提前创建空会话，但不会启动模型。执行中、等待授权或等待回答时暂时不能继续发送。
 - “新建会话”只解除当前绑定，不会删除或停止旧 Harness 任务；“打开 Harness”进入当前选定 Harness 的首页。
-- 命令插件不可用时仍可显示旧版状态，但输入功能会明确禁用；草稿不会被静默丢弃。
+- 命令通道不可用时发送按钮会禁用并说明原因；草稿不会被静默丢弃。
+- 提交结果未确认时，状态行提供「丢弃」：解除待确认请求对切换的阻塞；若草稿仍是原消息且没有附件会一并清空，编辑过的草稿会保留。服务端明确拒绝会自动解除待确认。
 
 ### 第二阶段：多任务卡片与提醒
 
@@ -191,13 +190,13 @@ pnpm dsh plugin --profile web add dsh-mac-pet
 
 ### 截图附件
 
-当前版本的输入框未提供图片粘贴或截图附件入口；应用启动时也不会恢复旧版附件草稿。桥接协议仍保留图片附件能力，但不能从当前输入界面使用。
+当前版本的输入框未提供图片粘贴或截图附件入口。桥接协议仍保留图片附件能力，但不能从当前输入界面使用。
 
 ### 文件和技能选择
 
 - 在输入框中输入 `@` 可搜索当前会话工作目录的文件和目录，输入 `$` 可选择当前会话允许用户调用的技能。使用方向键选择、Enter 确认、Esc 关闭；也可点击候选项。
 - 选择文件或目录会插入 Harness 识别的引用，不上传整个目录；不能用该格式表达的路径会提示。技能调用放在消息开头，每条消息可选择一个，与 Harness 命令同名的技能不可选择。
-- 新会话查询时可能先创建空会话；切换会话或连接时，旧查询结果不会用于新目标。相应服务不可用或桥接插件版本较旧时会提示，已有文字草稿会保留。
+- 新会话查询时可能先创建空会话；切换会话或连接时，旧查询结果不会用于新目标。相应服务不可用时会提示，已有文字草稿会保留。
 
 ### 鲸鱼娘外观
 
@@ -246,9 +245,9 @@ pnpm dsh plugin --profile web add dsh-mac-pet
 
 「Harness 连接」页会显示当前可发现的 Harness 实例，并统一选择状态与消息目标。只有一个实例时 DSH Pet 自动使用它；两个实例同时启动时，首次需要用户选择。目标确定后，另一个实例出现不会触发自动切换。
 
-新版 bridge 为每个运行实例提供同源的状态与命令通道，菜单、任务卡片和快捷键等打开入口都会跟随当前选定的 Harness。新版 bridge 必须先在目标 Harness 中加载，App 才能读取实例检测元信息；仅更新 DSH Pet App 不足以完成识别。
+桥接插件为每个运行实例提供同源的状态与命令通道，菜单、任务卡片和快捷键等打开入口都会跟随当前选定的 Harness。桥接插件必须先在目标 Harness 中加载，App 才能读取实例检测元信息；仅更新 DSH Pet App 不足以完成识别。
 
-旧版 bridge 没有来源身份时，DSH Pet 保留只读状态兼容，连接页显示「来源未知」，默认禁用发送并提示升级插件；旧版状态兼容不保证消息与状态来自同一 Harness。DSH Pet 不会启动、停止、升级或修改 Harness，也不模拟 Web UI。
+DSH Pet 不会启动、停止、升级或修改 Harness，也不模拟 Web UI。
 
 菜单栏 →「设置…」包含六个页面：「桌宠外观」「交互与提醒」「快捷键」「宠物管理」「Harness 连接」和「关于与更新」。可在其中调整桌宠、交互行为、快捷入口、当前 Harness 目标和版本信息，修改立即生效。
 
@@ -262,12 +261,13 @@ cd dsh-mac-pet
 bash uninstall.sh
 ```
 
-脚本会退出并移除 `DSH Pet.app` 与旧版 `MoodBall.app`（检查 `~/Applications` 和 `/Applications`），
-并询问是否同时移除 DSH Pet 桥接插件（移除后重启 dsh web 生效）。
+脚本会退出并移除 `DSH Pet.app`（检查 `~/Applications` 和 `/Applications`），
+并询问是否同时移除 DSH Pet 桥接插件（CLI 安装的 web profile，移除后重启 dsh web 生效）。
+桌面版安装在独立 `desktop` profile 中，需在桌面版「插件」页面单独禁用或移除。
 
 ### 常见问题
 
-- **鲸鱼娘显示未连接？** 先确认目标 Harness 正在运行，并确认新版 bridge 已在目标 Harness 中加载；仅更新 DSH Pet App 不足以完成实例检测。
+- **鲸鱼娘显示未连接？** 先确认目标 Harness 正在运行，并确认桥接插件已在目标 Harness 中加载；仅更新 DSH Pet App 不足以完成实例检测。
 - **「设置 → 插件」里怎么没有 DSH Pet 插件卡片？** 这是正常的——桥接插件没有任何设置项
   （所有配置都在 app 的设置面板里），所以不显示配置卡片。可在「设置 → 插件 → **插件列表**」
   中查看它（状态为「已挂载」）。
@@ -279,9 +279,18 @@ bash uninstall.sh
 pnpm install
 pnpm build
 
+# 桥接插件与安装器测试
+node --test tests/*.test.mjs
+
 # app：构建 dist/DSH Pet.app（含鲸鱼娘图集）并启动
 bash make-app.sh
+
+# app 单元测试
+swift test
 ```
+
+注意：`install.sh` 通过 npm 包名安装桥接插件，不会使用本仓库的本地 `lib/`。要验证尚未发布的
+插件改动，请使用目标 Harness 的本地插件安装入口（或先发布新版本）再重启 Harness。
 
 ## 📄 License
 

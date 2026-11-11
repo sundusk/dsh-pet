@@ -13,14 +13,13 @@ set -euo pipefail
 
 PLUGIN_SPEC="dsh-mac-pet"
 PLUGIN_NAME="dsh-mac-pet"
-LEGACY_PLUGIN_NAME="@sundusk/dsh-moodball-status"
 PLUGIN_PROFILE="web"
-STATUS_URL="${DSH_PET_STATUS_URL:-${MOODBALL_STATUS_URL:-http://127.0.0.1:3080/api/dsh-pet/status}}"
-SOCKET_PATH="${DSH_PET_SOCKET_PATH:-${MOODBALL_SOCKET_PATH:-$HOME/Library/Application Support/DSH Pet/dsh-pet.sock}}"
-APP_SRC="dist/DSH Pet.app"
+# Resolve local build outputs next to this script, not next to the caller's cwd.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+STATUS_URL="${DSH_PET_STATUS_URL:-http://127.0.0.1:3080/api/dsh-pet/status}"
+APP_SRC="$SCRIPT_DIR/dist/DSH Pet.app"
 RELEASE_URL="https://github.com/sundusk/dsh-mac-pet/releases/latest/download/DSH-Pet.app.zip"
 CONFIG_PATH="$HOME/Library/Application Support/DSH Pet/config.json"
-LEGACY_CONFIG_PATH="$HOME/Library/Application Support/MoodBall/config.json"
 
 APP_TMP=""
 APP_STAGE=""
@@ -189,7 +188,6 @@ scan_source_dir() {
 config_field() {
     local field="$1"
     local config_path="$CONFIG_PATH"
-    [ -f "$config_path" ] || config_path="$LEGACY_CONFIG_PATH"
     [ -f "$config_path" ] || return 1
 
     if command -v node >/dev/null 2>&1; then
@@ -495,18 +493,11 @@ plugin_is_installed() {
     if ! inventory=$(harness_cli plugin --profile "$PLUGIN_PROFILE" list --depth 0 --json 2>/dev/null); then
         return 2
     fi
-    if [[ "$inventory" == *"$PLUGIN_NAME"* ]]; then
-        return 0
-    fi
-    if [[ "$inventory" == *"$LEGACY_PLUGIN_NAME"* ]]; then
-        return 3
-    fi
-    return 1
+    [[ "$inventory" == *"$PLUGIN_NAME"* ]]
 }
 
 # ---------------------------------------------------------------------------
-# The instance manifest is the authoritative discovery path for new plugin
-# instances. Keep the legacy socket probe below as a compatibility fallback.
+# The instance manifest is the only discovery path for plugin instances.
 instance_manifest_record() {
     local manifest="$1"
     local protocol_version pid kind status_socket command_socket
@@ -566,41 +557,22 @@ instance_manifest_is_active() {
     [ "$HARNESS_RUNNING" -eq 1 ] || return 1
     [ -n "$HARNESS_PID" ] || return 1
 
-    manifest_dir="${DSH_PET_INSTANCE_DIRECTORY:-${MOODBALL_INSTANCE_DIRECTORY:-$HOME/Library/Application Support/DSH Pet/instances}}"
-    for manifest_dir in "$manifest_dir" "$HOME/Library/Application Support/MoodBall/instances"; do
-        for manifest in "$manifest_dir"/*.json; do
-            [ -f "$manifest" ] || continue
-            record=$(instance_manifest_record "$manifest" 2>/dev/null) || continue
-            IFS=$'\t' read -r manifest_pid manifest_kind status_socket command_socket <<< "$record"
-            [ "$manifest_pid" = "$HARNESS_PID" ] || continue
-            instance_kind_matches_harness "$manifest_kind" || continue
-            instance_socket_probe "$status_socket" || continue
-            instance_socket_probe "$command_socket" || continue
-            return 0
-        done
+    manifest_dir="${DSH_PET_INSTANCE_DIRECTORY:-$HOME/Library/Application Support/DSH Pet/instances}"
+    for manifest in "$manifest_dir"/*.json; do
+        [ -f "$manifest" ] || continue
+        record=$(instance_manifest_record "$manifest" 2>/dev/null) || continue
+        IFS=$'\t' read -r manifest_pid manifest_kind status_socket command_socket <<< "$record"
+        [ "$manifest_pid" = "$HARNESS_PID" ] || continue
+        instance_kind_matches_harness "$manifest_kind" || continue
+        instance_socket_probe "$status_socket" || continue
+        instance_socket_probe "$command_socket" || continue
+        return 0
     done
     return 1
 }
 
 socket_is_active() {
-    if instance_manifest_is_active; then
-        return 0
-    fi
-    [ -S "$SOCKET_PATH" ] || return 1
-    if [ "$HARNESS_TYPE" = "desktop" ]; then
-        # A CLI Web process may own the same path. Attribute it to Desktop only
-        # when the currently selected Desktop Host has the listening socket.
-        [ "$HARNESS_RUNNING" -eq 1 ] && [ -n "$HARNESS_PID" ] || return 1
-        command -v lsof >/dev/null 2>&1 || return 1
-        lsof -a -p "$HARNESS_PID" -U -Fn 2>/dev/null | grep -Fx "n$SOCKET_PATH" >/dev/null || return 1
-    fi
-    if command -v nc >/dev/null 2>&1; then
-        # macOS nc -z -U can report failure for a reachable Unix stream.
-        nc -w 1 -U "$SOCKET_PATH" </dev/null >/dev/null 2>&1 && return 0
-        return 1
-    fi
-    # macOS 的标准工具集可能没有 nc -U；套接字存在仍是有用的 active 信号。
-    return 0
+    instance_manifest_is_active
 }
 
 status_is_active() {
@@ -651,7 +623,7 @@ stop_running_pet() {
     while read -r pid command; do
         [ -n "$pid" ] || continue
         case "$command" in
-            */MoodBall.app/Contents/MacOS/MoodBall|*/DSH\ Pet.app/Contents/MacOS/DSHPet)
+            */DSH\ Pet.app/Contents/MacOS/DSHPet)
                 kill "$pid" 2>/dev/null || true
                 ;;
         esac
@@ -663,15 +635,12 @@ cleanup_duplicate_apps() {
     local candidate
 
     for candidate in \
-        "/Applications/MoodBall.app" \
-        "$HOME/Applications/MoodBall.app" \
-        "$PWD/dist/MoodBall.app" \
         "/Applications/DSH Pet.app" \
         "$HOME/Applications/DSH Pet.app" \
-        "$PWD/dist/DSH Pet.app"; do
+        "$SCRIPT_DIR/dist/DSH Pet.app"; do
         [ "$candidate" = "$APP_DEST" ] && continue
         [ -d "$candidate" ] || continue
-        info "清理旧版或重复应用：$candidate"
+        info "清理重复应用：$candidate"
         /usr/bin/trash "$candidate"
     done
 }
@@ -747,10 +716,6 @@ if [ "$HARNESS_TYPE" = "source" ] || [ "$HARNESS_TYPE" = "npm" ]; then
                 PLUGIN_STATE="notInstalled"
                 warn "状态插件尚未安装，将安装到：$HARNESS_DISPLAY"
                 ;;
-            3)
-                PLUGIN_STATE="legacy"
-                warn "检测到旧版桥接插件；请安装 dsh-mac-pet 并重启 Harness。"
-                ;;
             *)
                 PLUGIN_STATE="unknown"
                 warn "无法通过目标 Harness CLI 确认插件是否已安装。"
@@ -761,12 +726,11 @@ else
     PLUGIN_STATE="unknown"
 fi
 
-# Unix Socket 优先，HTTP 作为兼容回退。若 CLI 已明确说目标 profile 没有插件，
-# 但传输层却来自某个正在工作的 Harness，不把它静默归属到错误 profile。
+# 优先用实例清单判断 ACTIVE；清单不可用时用 HTTP 状态接口补充。
+# 若 CLI 已明确说目标 profile 没有插件，但传输层却来自某个正在工作的 Harness，
+# 不把它静默归属到错误 profile。
 if socket_is_active; then
-    if [ "$PLUGIN_STATE" = "legacy" ]; then
-        warn "旧版桥接仍在运行；更新插件并重启后才会加载新名称。"
-    elif [ "$PLUGIN_STATE" = "notInstalled" ]; then
+    if [ "$PLUGIN_STATE" = "notInstalled" ]; then
         warn "检测到活动状态桥接，但目标 profile 未列出插件；不会改装其它 Harness。"
         PLUGIN_STATE="unknown"
     else
@@ -774,9 +738,7 @@ if socket_is_active; then
         ok "状态插件已连接（Unix Socket）"
     fi
 elif status_is_active; then
-    if [ "$PLUGIN_STATE" = "legacy" ]; then
-        warn "旧版桥接仍在运行；更新插件并重启后才会加载新名称。"
-    elif [ "$PLUGIN_STATE" = "notInstalled" ]; then
+    if [ "$PLUGIN_STATE" = "notInstalled" ]; then
         warn "检测到活动 HTTP 状态，但目标 profile 未列出插件；不会改装其它 Harness。"
         PLUGIN_STATE="unknown"
     else
@@ -831,18 +793,6 @@ if [ ! -d "$APP_SRC" ]; then
     exit 1
 fi
 
-# 旧版 Waterball 迁移保持原有行为；不会触碰 Harness 进程。
-if [ -d "/Applications/Waterball.app" ]; then
-    info "检测到旧版 Waterball.app，正在迁移到 DSH Pet……"
-    osascript -e 'tell application "Waterball" to quit' 2>/dev/null || true
-    sleep 1
-    if pgrep -x Waterball >/dev/null 2>&1; then
-        pkill -x Waterball 2>/dev/null || true
-    fi
-    rm -rf "/Applications/Waterball.app"
-    ok "旧版 Waterball.app 已移除"
-fi
-
 stop_running_pet
 install_app
 APP_TMP=""
@@ -855,12 +805,10 @@ else
 fi
 
 # App 启动后再检查一次；刚安装的 Bundle 可能要等下次 Harness 启动。
-if [ "$PLUGIN_STATE" != "legacy" ]; then
-    if socket_is_active; then
-        PLUGIN_STATE="active"
-    elif status_is_active; then
-        PLUGIN_STATE="active"
-    fi
+if socket_is_active; then
+    PLUGIN_STATE="active"
+elif status_is_active; then
+    PLUGIN_STATE="active"
 fi
 
 save_harness_config || true
@@ -885,10 +833,6 @@ case "$PLUGIN_STATE" in
         ;;
     notInstalled)
         echo "  ⚠ 状态插件尚未安装。"
-        ;;
-    legacy)
-        echo "  ⚠ 检测到旧版插件，请移除 @sundusk/dsh-moodball-status，"
-        echo "    再安装 dsh-mac-pet 并重启 Harness。"
         ;;
     unknown)
         echo "  ⚠ 暂时无法确认状态插件是否已连接。"

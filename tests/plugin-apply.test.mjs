@@ -4,6 +4,9 @@ import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { clearAmbientHarnessEnv } from './ambient-env.mjs'
+
+clearAmbientHarnessEnv()
 
 function waitForServer(path) {
   return new Promise((resolve, reject) => {
@@ -74,13 +77,7 @@ async function command(socket, nextLine, id, action, fields = {}) {
 test('plugin adapter calls official-style workspace and session services', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-pet-plugin-'))
   const instanceDirectory = join(root, 'instances')
-  const statusPath = join(root, 'status.sock')
-  const commandPath = join(root, 'command.sock')
-  const previousStatusPath = process.env.DSH_PET_SOCKET_PATH
-  const previousCommandPath = process.env.DSH_PET_COMMAND_SOCKET_PATH
   const previousInstanceDirectory = process.env.DSH_PET_INSTANCE_DIRECTORY
-  process.env.DSH_PET_SOCKET_PATH = statusPath
-  process.env.DSH_PET_COMMAND_SOCKET_PATH = commandPath
   process.env.DSH_PET_INSTANCE_DIRECTORY = instanceDirectory
 
   let eventHandler
@@ -92,10 +89,12 @@ test('plugin adapter calls official-style workspace and session services', async
   const calls = []
   let sessionRunning = false
   let listFails = false
+  let listCalls = 0
   let projection = { kind: 'sequenced', values: { turnOutline: [{ response: 'Earlier' }, { response: 'Latest' }] } }
   let projectionChanged
   const agent = { id: 'dsh-pet-session-test' }
   const services = {
+    connection: { requestRejection: () => undefined },
     sessionFileReferences: { list: async (actualAgent, query) => {
       assert.equal(actualAgent, agent)
       return [{ path: `${query} file`, kind: 'file' }, { path: 'folder', kind: 'directory' }]
@@ -142,6 +141,7 @@ test('plugin adapter calls official-style workspace and session services', async
         return { sessionId: request.sessionId }
       },
       list: async () => {
+        listCalls += 1
         if (listFails) throw new Error('list unavailable')
         return { items: workspace.sessionIds.map(sessionId => ({
         sessionId,
@@ -295,7 +295,6 @@ test('plugin adapter calls official-style workspace and session services', async
     assert.deepEqual(routes.map(route => route.path), [
       '/api/dsh-pet/status',
       '/api/dsh-pet/install-status',
-      '/api/moodball/status',
       '/api/dsh-pet/session-open/pending',
       '/api/dsh-pet/session-open/ack',
     ])
@@ -345,13 +344,20 @@ test('plugin adapter calls official-style workspace and session services', async
     eventHandler({ id: fields.sessionId }, { type: 'approval/decided', data: { outcome: 'rejected' } })
     statusRoute.handler({ method: 'GET' }, { writeHead() {}, end: body => { routeBody = JSON.parse(body) } })
     assert.equal(routeBody.mood, 'failed')
+
+    // Streaming chunks still update the live status, but must not trigger a
+    // session-list query per token. Let the pending task refresh settle first.
+    await new Promise(resolve => setTimeout(resolve, 800))
+    const listCallsBeforeChunks = listCalls
+    for (let index = 0; index < 50; index += 1) {
+      eventHandler({ id: fields.sessionId }, { type: 'assistant/chunk', data: { text: 'x' } })
+    }
+    await new Promise(resolve => setTimeout(resolve, 800))
+    assert.equal(listCalls, listCallsBeforeChunks)
+
     socket.destroy()
   } finally {
     for (const cleanup of cleanups.reverse()) cleanup()
-    if (previousStatusPath === undefined) delete process.env.DSH_PET_SOCKET_PATH
-    else process.env.DSH_PET_SOCKET_PATH = previousStatusPath
-    if (previousCommandPath === undefined) delete process.env.DSH_PET_COMMAND_SOCKET_PATH
-    else process.env.DSH_PET_COMMAND_SOCKET_PATH = previousCommandPath
     if (previousInstanceDirectory === undefined) delete process.env.DSH_PET_INSTANCE_DIRECTORY
     else process.env.DSH_PET_INSTANCE_DIRECTORY = previousInstanceDirectory
     await rm(root, { recursive: true, force: true })

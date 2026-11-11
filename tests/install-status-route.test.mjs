@@ -25,9 +25,9 @@ test('install status requires Harness request authorization and exposes no paths
   }
   apply(ctx)
   assert.ok(route)
-  async function request(method = 'GET') {
+  async function request(method = 'GET', url = '/api/dsh-pet/install-status') {
     const result = { headers: {} }
-    await route.handler({ method, headers: {} }, {
+    await route.handler({ method, url, headers: {} }, {
       writeHead: status => { result.status = status },
       setHeader: (name, value) => { result.headers[name] = value },
       end: body => { result.body = body === undefined ? undefined : JSON.parse(body) },
@@ -52,4 +52,5 @@ test('install status requires Harness request authorization and exposes no paths
   assert.equal(actual.headers['cache-control'], 'no-store')
   assert.deepEqual(Object.keys(actual.body), ['status'])
   assert.ok(['installed', 'not-found', 'unknown'].includes(actual.body.status))
+  assert.equal((await request('GET', '/api/dsh-pet/install-status?refresh=1')).status, 200)
 })

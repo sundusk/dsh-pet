@@ -22,7 +22,6 @@ function runPluginProbe(inventory, queryFails = false) {
     env: {
       ...process.env,
       PLUGIN_NAME: 'dsh-mac-pet',
-      LEGACY_PLUGIN_NAME: '@sundusk/dsh-moodball-status',
       PLUGIN_PROFILE: 'web',
       PLUGIN_INVENTORY: inventory,
       PLUGIN_QUERY_FAIL: queryFails ? '1' : '0',
@@ -32,20 +31,18 @@ function runPluginProbe(inventory, queryFails = false) {
   return result.status
 }
 
-test('installer distinguishes current, legacy, absent, and unavailable plugin states', () => {
+test('installer distinguishes installed, absent, and unavailable plugin states', () => {
   assert.equal(runPluginProbe('installed: dsh-mac-pet'), 0)
-  assert.equal(runPluginProbe('installed: @sundusk/dsh-moodball-status'), 3)
   assert.equal(runPluginProbe('installed: another-plugin'), 1)
   assert.equal(runPluginProbe('', true), 2)
 })
 
-function runSocketProbe({ home, socketPath, pid, type, running = '1', path }) {
+function runSocketProbe({ home, pid, type, running = '1', path }) {
   const result = spawnSync('bash', ['-c', `${helperSource}\nsocket_is_active`], {
     encoding: 'utf8',
     env: {
       ...process.env,
       HOME: home,
-      SOCKET_PATH: socketPath,
       HARNESS_PID: pid,
       HARNESS_TYPE: type,
       HARNESS_RUNNING: running,
@@ -89,15 +86,13 @@ test('installer discovers a matching instance manifest and both active sockets',
     }))
     assert.equal(runSocketProbe({
       home,
-      socketPath: join(root, 'legacy.sock'),
       pid: String(process.pid),
       type: 'desktop',
     }), 0)
     if (process.platform === 'darwin') {
       assert.equal(runSocketProbe({
         home,
-        socketPath: join(root, 'legacy.sock'),
-        pid: String(process.pid),
+          pid: String(process.pid),
         type: 'desktop',
         path: '/usr/bin:/bin:/usr/sbin:/sbin',
       }), 0, 'macOS plutil fallback should discover manifests without Node')
@@ -132,31 +127,12 @@ test('installer does not claim an active manifest belonging to another PID', asy
     }))
     assert.notEqual(runSocketProbe({
       home,
-      socketPath: join(root, 'legacy.sock'),
       pid: String(process.pid),
       type: 'desktop',
     }), 0)
   } finally {
     await new Promise(resolve => status.close(resolve))
     await new Promise(resolve => command.close(resolve))
-    await rm(root, { recursive: true, force: true })
-  }
-})
-
-test('installer keeps detecting a reachable legacy socket', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-pet-installer-'))
-  const home = join(root, 'home')
-  const legacySocket = join(root, 'legacy.sock')
-  const server = await listen(legacySocket)
-  try {
-    assert.equal(runSocketProbe({
-      home,
-      socketPath: legacySocket,
-      pid: '',
-      type: 'source',
-    }), 0)
-  } finally {
-    await new Promise(resolve => server.close(resolve))
     await rm(root, { recursive: true, force: true })
   }
 })

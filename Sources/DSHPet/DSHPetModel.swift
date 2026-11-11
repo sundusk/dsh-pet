@@ -5,7 +5,6 @@ import Combine
 
 enum ConnectionState {
     case connected
-    case pluginDisabled
     case unreachable
 }
 
@@ -20,7 +19,7 @@ enum MoodColorMap {
         case "done": return "搞定啦"
         case "failed": return "出错了"
         case "stopped": return "已停止"
-        case "disconnected", "unreachable", "disabled": return "未连接"
+        case "disconnected", "unreachable": return "未连接"
         default: return "未知"
         }
     }
@@ -80,8 +79,6 @@ final class DSHPetModel: ObservableObject {
         switch connectionState {
         case .connected:
             return "已连接 · \(moodLabel) · \(transportKind.rawValue)"
-        case .pluginDisabled:
-            return "插件已关闭（灰球）"
         case .unreachable:
             return "Harness 未连接（灰球）"
         }
@@ -91,7 +88,7 @@ final class DSHPetModel: ObservableObject {
 
     private let bridge: MoodBridge
     private var bridgeCancellable: AnyCancellable?
-    private var settingsCancellable: AnyCancellable?
+    private var appearanceCancellable: AnyCancellable?
     private var commandSnapshotCancellable: AnyCancellable?
     private var didStart = false
     private var configuredHarnessID: String?
@@ -119,6 +116,26 @@ final class DSHPetModel: ObservableObject {
             .sink { [weak self] _, _, _, _ in
                 self?.refreshPresentation()
             }
+        // Mood colors and breathing speed are edited in Settings while the pet
+        // stays visible. Recompute the presentation immediately instead of
+        // waiting for the next Harness event to refresh it.
+        appearanceCancellable = Publishers.MergeMany(
+            PetSettings.shared.$moodColors.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            PetSettings.shared.$disconnectedColor.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            PetSettings.shared.$breathingSpeed.dropFirst().map { _ in () }.eraseToAnyPublisher()
+        )
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in
+                guard let self else { return }
+                self.breathingPeriod = PetSettings.shared.breathingSpeed
+                if self.connected {
+                    self.setMood(self.mood, label: self.moodLabel)
+                } else {
+                    // The initial mood string is "idle" before any bridge
+                    // event; do not paint a disconnected pet with that color.
+                    self.color = PetSettings.shared.disconnectedColor
+                }
+            }
         commandClient.onAccepted = { [weak self] in
             self?.barPhase = .resting
         }
@@ -134,22 +151,13 @@ final class DSHPetModel: ObservableObject {
     func start() {
         guard !didStart else { return }
         didStart = true
-        let settings = SettingsStore.shared
-        settingsCancellable = Publishers.CombineLatest3(settings.$apiBase, settings.$pollInterval, settings.$requestTimeout)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _, _, _ in
-                guard let self else { return }
-                self.bridge.updateHTTPConfiguration(settings: settings)
-            }
-        bridge.updateHTTPConfiguration(settings: settings)
+        breathingPeriod = PetSettings.shared.breathingSpeed
         harnessConnections.start()
     }
 
     func stop() {
         guard didStart else { return }
         didStart = false
-        settingsCancellable?.cancel()
-        settingsCancellable = nil
         bridge.stop()
         commandClient.stop()
         harnessConnections.stop()
@@ -205,6 +213,7 @@ final class DSHPetModel: ObservableObject {
         }
         commandClient.clearFocusedTask()
         taskPanelMode = .closed
+        if barPhase != .composer { barPhase = .resting }
     }
 
     func focusTask(_ id: String) {
@@ -237,10 +246,7 @@ final class DSHPetModel: ObservableObject {
     }
 
     func openHarness() {
-        harnessConnections.open(
-            legacyWebAddress: SettingsStore.shared.apiBase,
-            legacyConnected: connected && transportKind == .http
-        )
+        harnessConnections.open()
     }
 
     func selectHarnessTarget(_ id: String) {
@@ -248,28 +254,29 @@ final class DSHPetModel: ObservableObject {
     }
 
     func refreshHarnessConnections() {
+        // `refresh()` notifies `onRefresh` after reconciling, so configuring a
+        // second time here would tear down a healthy command connection.
         harnessConnections.refresh()
-        _ = configureHarness(harnessConnections.effectiveInstance, force: true)
     }
 
     @discardableResult
-    private func configureHarness(_ instance: HarnessInstance?, force: Bool = false) -> Bool {
+    private func configureHarness(_ instance: HarnessInstance?) -> Bool {
         guard didStart else { return true }
-        let legacy = instance == nil && harnessConnections.allowsLegacyFallback
-        let id = instance?.id ?? (legacy ? "legacy-read-only" : "none")
-        guard force || id != configuredHarnessID else { return true }
-        // Source-less legacy sockets cannot prove that status and commands have the same owner.
-        guard commandClient.configure(instance: instance, allowLegacy: false) else { return false }
-        bridge.configure(instance: instance, allowLegacy: legacy)
-        if instance != nil { commandClient.start() }
-        if instance != nil || legacy { bridge.start() }
+        let id = instance?.id ?? "none"
+        guard id != configuredHarnessID else { return true }
+        guard commandClient.configure(instance: instance) else { return false }
+        bridge.configure(instance: instance)
+        if instance != nil {
+            commandClient.start()
+            bridge.start()
+        }
         configuredHarnessID = id
         return true
     }
 
     /// Pick the best available presentation source. The command socket's task
     /// deck wins while the task API is available; otherwise the bound Session
-    /// and finally the global bridge snapshot keep the legacy behavior.
+    /// and finally the global instance snapshot are used.
     private func refreshPresentation() {
         if commandClient.connection == .connected, commandClient.taskListAvailable {
             applyBubbleDeck(commandClient.bubbleDeck)
@@ -288,7 +295,7 @@ final class DSHPetModel: ObservableObject {
         _ deck: DSHPetBubbleDeck,
         forceSelection: String? = nil
     ) {
-        breathingPeriod = SettingsStore.shared.breathingSpeed
+        breathingPeriod = PetSettings.shared.breathingSpeed
         connected = true
         connectionState = .connected
         transportKind = .localSocket
@@ -367,8 +374,8 @@ final class DSHPetModel: ObservableObject {
         self.mood = mood
         moodLabel = label
         color = mood == "disconnected"
-            ? SettingsStore.shared.disconnectedColor
-            : SettingsStore.shared.moodColors[mood] ?? SettingsStore.shared.disconnectedColor
+            ? PetSettings.shared.disconnectedColor
+            : PetSettings.shared.moodColors[mood] ?? PetSettings.shared.disconnectedColor
     }
 
     private func clearBubbleDeckSelection() {
@@ -394,7 +401,7 @@ final class DSHPetModel: ObservableObject {
     }
 
     /// Open the Session represented by the currently visible task bubble.
-    /// Aggregate and legacy status bubbles intentionally remain inert.
+    /// Aggregate status bubbles intentionally remain inert.
     func openBubbleTask() {
         guard let taskID = bubblePresentation?.taskID,
               let task = commandClient.tasks.first(where: { $0.id == taskID }) else { return }
@@ -404,15 +411,12 @@ final class DSHPetModel: ObservableObject {
     func openTask(_ task: DSHPetTaskSummary) {
         // Bring the exact selected Harness instance forward before its client
         // half selects the Session.
-        harnessConnections.open(
-            legacyWebAddress: SettingsStore.shared.apiBase,
-            legacyConnected: connected && transportKind == .http
-        )
+        harnessConnections.open()
         commandClient.openTaskSession(task)
     }
 
     private func apply(_ snapshot: MoodBridgeSnapshot, connection: TransportConnection) {
-        breathingPeriod = SettingsStore.shared.breathingSpeed
+        breathingPeriod = PetSettings.shared.breathingSpeed
 
         switch connection {
         case .connected:
@@ -433,28 +437,18 @@ final class DSHPetModel: ObservableObject {
                     taskID: nil
                 )
             }
-        case .pluginDisabled:
-            applyPluginDisabled()
         case .unavailable:
             applyUnreachable()
         }
     }
 
-    private func applyPluginDisabled() {
-        connected = false
-        connectionState = .pluginDisabled
-        bubblePresentation = nil
-        mood = "disabled"
-        color = SettingsStore.shared.disconnectedColor
-        moodLabel = "插件已关闭"
-    }
 
     private func applyUnreachable() {
         connected = false
         connectionState = .unreachable
         bubblePresentation = nil
         mood = "unreachable"
-        color = SettingsStore.shared.disconnectedColor
+        color = PetSettings.shared.disconnectedColor
         moodLabel = "未连接"
     }
 }

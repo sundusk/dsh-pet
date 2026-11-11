@@ -9,7 +9,6 @@ import AppKit
 enum DSHPetMain {
     @MainActor
     static func main() {
-        DSHPetMigration.migrateUserDefaults()
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

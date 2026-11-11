@@ -7,14 +7,14 @@ import SwiftUI
 /// second, mock settings model.
 struct SettingsPanelView: View {
     @ObservedObject var model: DSHPetModel
-    @ObservedObject private var settings: SettingsStore
+    @ObservedObject private var settings: PetSettings
     @ObservedObject private var connections: HarnessConnectionManager
     @ObservedObject private var petLibrary: CustomPetLibrary
     @State private var page: SettingsPage = .appearance
 
     init(model: DSHPetModel) {
         self.model = model
-        _settings = ObservedObject(wrappedValue: SettingsStore.shared)
+        _settings = ObservedObject(wrappedValue: PetSettings.shared)
         _connections = ObservedObject(wrappedValue: model.harnessConnections)
         _petLibrary = ObservedObject(wrappedValue: CustomPetLibrary.shared)
     }
@@ -28,10 +28,9 @@ struct SettingsPanelView: View {
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(32)
             }
-            .background(Color.white)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(minWidth: 980, idealWidth: 1060, minHeight: 520, idealHeight: 530)
-        .preferredColorScheme(.light)
         .tint(.blue)
         .environment(\.controlActiveState, .active)
     }
@@ -43,7 +42,7 @@ struct SettingsPanelView: View {
         case .interaction: InteractionSettingsPage(settings: settings)
         case .shortcuts: ShortcutsSettingsPage(settings: settings)
         case .petManagement: PetManagementPage(settings: settings, library: petLibrary)
-        case .connection: HarnessConnectionSettingsPage(model: model, connections: connections, commandClient: model.commandClient, settings: settings)
+        case .connection: HarnessConnectionSettingsPage(model: model, connections: connections, commandClient: model.commandClient)
         case .about: AboutSettingsPage()
         }
     }
@@ -119,7 +118,7 @@ private struct SettingsSidebar: View {
             .padding(.horizontal, 18).padding(.bottom, 18)
         }
         .frame(width: 200)
-        .background(Color(red: 0.89, green: 0.915, blue: 0.945))
+        .background(Color(nsColor: .underPageBackgroundColor))
     }
 }
 
@@ -137,7 +136,7 @@ private struct JingyuniangAvatar: View {
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
             }
         }
-        .background(.white)
+        .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .accessibilityHidden(true)
     }
@@ -283,7 +282,7 @@ private struct PetSelectionButton: View {
 // MARK: - Appearance
 
 private struct AppearanceSettingsPage: View {
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     @ObservedObject var library: CustomPetLibrary
     @State private var previewMood = "idle"
     @State private var showingColors = false
@@ -380,7 +379,7 @@ private struct AppearanceSettingsPage: View {
                                 .fill(settings.moodColors[config.mood] ?? Color(hex: config.defaultHex))
                                 .frame(width: 18, height: 18)
                                 .padding(3)
-                                .background(.white, in: RoundedRectangle(cornerRadius: 6))
+                                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
                                 .overlay { RoundedRectangle(cornerRadius: 6).stroke(.gray.opacity(0.18)) }
                         }
                     }
@@ -441,28 +440,28 @@ private struct AppearanceSettingsPage: View {
                 Text("仅预览，不影响正在运行的任务。")
                     .font(.caption2).foregroundStyle(.secondary)
                 Button("重置桌宠位置") {
-                    NotificationCenter.default.post(name: .waterballResetPosition, object: nil)
+                    NotificationCenter.default.post(name: .dshPetResetPosition, object: nil)
                 }
                 .frame(maxWidth: .infinity)
             }
             .padding(14)
-            .background(Color(red: 0.95, green: 0.955, blue: 0.965), in: RoundedRectangle(cornerRadius: 10))
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
         }
     }
 }
 
 struct PetPreview: View {
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     @ObservedObject var library: CustomPetLibrary
     let mood: String
     @State private var phase = false
     private var previewColor: Color { settings.moodColors[mood] ?? settings.disconnectedColor }
 
-    init(settings: SettingsStore, mood: String) {
+    init(settings: PetSettings, mood: String) {
         self.init(settings: settings, library: .shared, mood: mood)
     }
 
-    init(settings: SettingsStore, library: CustomPetLibrary, mood: String) {
+    init(settings: PetSettings, library: CustomPetLibrary, mood: String) {
         _settings = ObservedObject(wrappedValue: settings)
         _library = ObservedObject(wrappedValue: library)
         self.mood = mood
@@ -497,7 +496,7 @@ struct PetPreview: View {
                     if settings.skin.isSprite && customAvailable {
                         XiaoyuSpriteView(skin: settings.skin, mood: mood, color: previewColor, size: previewSize, glowEnabled: settings.glowEnabled, interactionTriggeredAt: nil, dragDirection: nil)
                     } else {
-                        DSHPetPreview(settings: settings, color: previewColor, diameter: previewSize)
+                        DSHPetPreview(settings: settings, mood: mood, color: previewColor, diameter: previewSize)
                     }
                 }
                 // Center the pet itself; its glow canvas is taller and bottom-aligned.
@@ -514,7 +513,8 @@ struct PetPreview: View {
 }
 
 private struct DSHPetPreview: View {
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
+    let mood: String
     let color: Color
     let diameter: CGFloat
     var body: some View {
@@ -523,17 +523,23 @@ private struct DSHPetPreview: View {
                 .frame(width: diameter, height: diameter)
                 .shadow(color: settings.glowEnabled ? color.opacity(0.8) : .clear, radius: diameter * 0.16)
             if settings.showEyes {
+                let eyeFill = StatusBallAppearance.eyeColor(for: mood, configured: settings.eyeColor.color)
                 TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { timeline in
                     let eyeScale = DSHPetView.blinkScale(at: timeline.date.timeIntervalSinceReferenceDate)
                     HStack(spacing: diameter * 0.13) {
-                        Capsule().fill(settings.eyeColor.color).frame(width: diameter * 0.1, height: diameter * 0.18)
-                        Capsule().fill(settings.eyeColor.color).frame(width: diameter * 0.1, height: diameter * 0.18)
+                        Capsule().fill(eyeFill).frame(width: diameter * 0.1, height: diameter * 0.18)
+                        Capsule().fill(eyeFill).frame(width: diameter * 0.1, height: diameter * 0.18)
                     }
                     .scaleEffect(y: eyeScale, anchor: .center)
                 }
             }
             Circle().fill(RadialGradient(colors: [.white.opacity(0.6), .clear], center: UnitPoint(x: 0.35, y: 0.28), startRadius: 0, endRadius: diameter * 0.6))
                 .frame(width: diameter * 0.82, height: diameter * 0.82).blendMode(.screen)
+            if StatusBallAppearance.showsStoppedRing(for: mood) {
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.30), lineWidth: 2)
+                    .frame(width: diameter + 6, height: diameter + 6)
+            }
         }
     }
 }
@@ -541,7 +547,7 @@ private struct DSHPetPreview: View {
 // MARK: - Interaction and colours
 
 private struct InteractionSettingsPage: View {
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageHeader(title: "交互与提醒", subtitle: "让桌宠随时可用，也不过分打扰。", bottomPadding: 14)
@@ -570,7 +576,7 @@ private struct InteractionSettingsPage: View {
                         }
                         Spacer()
                         Button("重置位置") {
-                            NotificationCenter.default.post(name: .waterballResetPosition, object: nil)
+                            NotificationCenter.default.post(name: .dshPetResetPosition, object: nil)
                         }
                     }
                     .padding(.vertical, 13)
@@ -647,7 +653,7 @@ private struct WideControlRow<Content: View>: View {
 
 private struct ColorSettingRow: View {
     let config: MoodColorConfig
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     var body: some View {
         HStack {
             Text(config.label); Spacer()
@@ -659,7 +665,7 @@ private struct ColorSettingRow: View {
 
 private struct StatusColorsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -696,13 +702,12 @@ private struct StatusColorsSheet: View {
         }
         .padding(24)
         .frame(width: 390, height: 480)
-        .preferredColorScheme(.light)
     }
 }
 
 private struct DSHPetDetailsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -739,14 +744,13 @@ private struct DSHPetDetailsSheet: View {
         }
         .padding(24)
         .frame(width: 480, height: 270)
-        .preferredColorScheme(.light)
     }
 }
 
 // MARK: - Shortcuts
 
 private struct ShortcutsSettingsPage: View {
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     @State private var recordingGlobal = false
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -803,7 +807,7 @@ private struct ShortcutsSettingsPage: View {
 
 private struct ShortcutEditorRow: View {
     let action: DSHPetShortcutAction
-    @ObservedObject var settings: SettingsStore
+    @ObservedObject var settings: PetSettings
     @State private var recording = false
     private var configuration: GlobalHotKeyConfiguration { settings.shortcutConfiguration(for: action) }
     var body: some View {
@@ -830,7 +834,6 @@ private struct HarnessConnectionSettingsPage: View {
     @ObservedObject var model: DSHPetModel
     @ObservedObject var connections: HarnessConnectionManager
     @ObservedObject var commandClient: DSHPetCommandClient
-    @ObservedObject var settings: SettingsStore
 
     private var targetBinding: Binding<String> { Binding(get: { connections.selectionID }, set: { model.selectHarnessTarget($0) }) }
 
@@ -897,33 +900,6 @@ private struct HarnessConnectionSettingsPage: View {
                             }
                         }
                     }
-                    SettingsCard {
-                        DisclosureGroup("高级兼容设置") {
-                            VStack(alignment: .leading, spacing: 14) {
-                                SettingRow("API 地址", detail: "仅在旧版兼容轮询连接中生效") {
-                                    TextField("http://127.0.0.1:3080", text: $settings.apiBase)
-                                        .textFieldStyle(.roundedBorder).frame(width: 215)
-                                }
-                                SettingRow("轮询间隔", detail: "仅在旧版兼容轮询连接中生效") {
-                                    HStack(spacing: 8) {
-                                        Slider(value: $settings.pollInterval, in: 0.3...5, step: 0.1)
-                                        Text(String(format: "%.1fs", settings.pollInterval))
-                                            .monospacedDigit().foregroundStyle(.secondary).frame(width: 42, alignment: .trailing)
-                                    }.frame(width: 215)
-                                }
-                                SettingRow("请求超时", detail: "仅在旧版兼容轮询连接中生效") {
-                                    HStack(spacing: 8) {
-                                        Slider(value: $settings.requestTimeout, in: 0.5...5, step: 0.5)
-                                        Text(String(format: "%.1fs", settings.requestTimeout))
-                                            .monospacedDigit().foregroundStyle(.secondary).frame(width: 42, alignment: .trailing)
-                                    }.frame(width: 215)
-                                }
-                                Text("新版桌面版或桥接实例的连接参数由实例自身提供。")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            .padding(.top, 12)
-                        }
-                    }
                     .padding(.top, 14)
                 }
                 .frame(width: 440, alignment: .leading)
@@ -936,10 +912,6 @@ private struct HarnessConnectionSettingsPage: View {
                             CapabilityStatusRow(icon: "list.bullet.rectangle", title: "任务状态", detail: "接收思考、等待操作与完成状态", available: model.connected)
                             Divider().opacity(0.45)
                             CapabilityStatusRow(icon: "paperplane", title: "发送消息", detail: "发送到选定工作区和会话", available: commandClient.capabilitiesAvailable)
-                            if model.connected && connections.effectiveInstance == nil && connections.instances.isEmpty {
-                                Text("当前旧版桥接仅提供状态读取，发送消息已禁用。")
-                                    .font(.caption).foregroundStyle(.orange).padding(.top, 10)
-                            }
                         }
                     }
                     SettingsCard(title: "安装与连接") {
@@ -948,7 +920,7 @@ private struct HarnessConnectionSettingsPage: View {
                             ConnectionHelpStep(number: "2", text: "搜索 dsh-mac-pet，按需安装并启用。")
                             ConnectionHelpStep(number: "3", text: "如 Harness 提示需要重启，请在任务结束后重启。")
                             ConnectionHelpStep(number: "4", text: "回到此处选择连接目标，点击「重新检测」。")
-                            Text("如果插件已经启用，请确认 Harness 正在运行；仅状态可用时，检查消息通道。")
+                            Text("如果插件已经启用，请确认 Harness 正在运行；消息不可用时检查命令通道。")
                                 .font(.caption).foregroundStyle(.secondary).padding(.top, 5)
                         }
                     }
@@ -968,9 +940,7 @@ private struct HarnessConnectionSettingsPage: View {
     }
 
     private var connectionDetail: String {
-        if let instance = connections.effectiveInstance { return instance.displayName }
-        if model.connected { return "旧版桥接 · 来源未知" }
-        return "等待发现 Harness 实例"
+        connections.effectiveInstance?.displayName ?? "等待发现 Harness 实例"
     }
     private var commandConnectionLabel: String {
         switch commandClient.connection { case .connected: return "已连接"; case .connecting: return "连接中"; case .disconnected: return "未连接" }
@@ -1115,8 +1085,13 @@ private struct UpdateSection: View {
                 HStack(spacing: 10) {
                     Button(isChecking ? "检查中…" : "检查更新") { check() }
                         .buttonStyle(.borderedProminent).disabled(isChecking)
-                    Link("查看版本记录", destination: UpdateChecker.releasesPageURL)
-                        .buttonStyle(.bordered)
+                    if case .available(let info) = state {
+                        Link("前往下载", destination: info.releaseURL)
+                            .buttonStyle(.borderedProminent)
+                    } else {
+                        Link("查看版本记录", destination: UpdateChecker.releasesPageURL)
+                            .buttonStyle(.bordered)
+                    }
                 }
                 .padding(.top, 15)
                 Text("检查更新只查询版本信息；发现新版本后可前往下载页面。更新不会自动下载或安装。")

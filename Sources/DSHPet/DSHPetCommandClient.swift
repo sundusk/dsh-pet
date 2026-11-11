@@ -143,6 +143,7 @@ final class DSHPetCommandClient: ObservableObject {
         static let taskReadMarkers = "dsh-pet.command.taskReadMarkers"
         static let draftImages = "dsh-pet.command.draftImages"
         static let requestSignature = "dsh-pet.command.pendingRequestSignature"
+        static let pendingSessionID = "dsh-pet.command.pendingSessionID"
         static let targetBindingKey = "dsh-pet.command.targetBindingKey"
     }
 
@@ -158,13 +159,11 @@ final class DSHPetCommandClient: ObservableObject {
     }
 
     private let defaults: UserDefaults
-    private let legacySocketPath: String
     private var socketPath: String
     private var expectedInstanceID: String?
     private var targetInstance: HarnessInstance?
     private var persistedTargetBindingKey: String?
-    private var allowLegacy = true
-    private var sourceEnabled = true
+    private var sourceEnabled = false
     private let queue = DispatchQueue(label: "com.sundusk.dsh-pet.command-client")
     private var connectionHandle: NWConnection?
     private var receiveBuffer = Data()
@@ -174,6 +173,9 @@ final class DSHPetCommandClient: ObservableObject {
     private var pendingRequestID: String?
     private var pendingRequestText: String?
     private var pendingRequestSignature: String?
+    /// The Session id sent to createSession. Persisted before the request so a
+    /// timeout retry reuses it instead of creating an orphan Session.
+    private var pendingSessionID: String?
     private var promptMayHaveBeenSent = false
     private var reconnectTask: Task<Void, Never>?
     private var connectionGeneration = 0
@@ -189,6 +191,7 @@ final class DSHPetCommandClient: ObservableObject {
     private var sessionBindingGeneration = 0
     private var sessionCreationTask: Task<String, Error>?
     private var readMarkers: [String: TaskReadMarker] = [:]
+    private static let readMarkerRetention: TimeInterval = 30 * 24 * 60 * 60
     private var hasReceivedTaskBaseline = false
     private var presentedActiveTaskIDs: Set<String>?
     private var bubbleOrder: [String] = []
@@ -199,12 +202,11 @@ final class DSHPetCommandClient: ObservableObject {
 
     init(
         defaults: UserDefaults = .standard,
-        socketPath: String = DSHPetCommandClient.defaultSocketPath,
+        socketPath: String = "",
         now: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }
     ) {
         self.defaults = defaults
         self.now = now
-        self.legacySocketPath = socketPath
         self.socketPath = socketPath
         persistedTargetBindingKey = defaults.string(forKey: Keys.targetBindingKey)
         selectedWorkspaceID = defaults.string(forKey: Keys.workspaceID)
@@ -216,19 +218,17 @@ final class DSHPetCommandClient: ObservableObject {
         pendingRequestID = defaults.string(forKey: Keys.requestID)
         pendingRequestText = defaults.string(forKey: Keys.requestText)
         pendingRequestSignature = defaults.string(forKey: Keys.requestSignature)
+        pendingSessionID = defaults.string(forKey: Keys.pendingSessionID)
         promptMayHaveBeenSent = pendingRequestID != nil
-        // Attachments are no longer exposed by the DSHPet composer. Ignore
-        // any legacy persisted draft metadata so it can never be sent unseen.
-        defaults.removeObject(forKey: Keys.draftImages)
+        if pendingRequestID != nil {
+            // The App may have quit while a prompt was in flight. Keep the
+            // explicit discard path available after relaunch.
+            submissionStatus = .unconfirmed
+        }
         if let data = defaults.data(forKey: Keys.taskReadMarkers),
            let markers = try? JSONDecoder().decode([String: TaskReadMarker].self, from: data) {
             readMarkers = markers
         }
-    }
-
-    nonisolated static var defaultSocketPath: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Application Support/DSH Pet/dsh-pet-command.sock"
     }
 
     var selectedWorkspace: DSHPetWorkspace? {
@@ -317,6 +317,12 @@ final class DSHPetCommandClient: ObservableObject {
             || pendingRequestID != nil
     }
 
+    /// Whether a request may still be in flight or may already have reached
+    /// Harness. The composer exposes an explicit discard action for this state.
+    var hasPendingSubmission: Bool {
+        pendingRequestID != nil || submissionStatus == .unconfirmed
+    }
+
     var targetBindingKey: String? {
         targetInstance?.bindingKey ?? persistedTargetBindingKey
     }
@@ -346,9 +352,9 @@ final class DSHPetCommandClient: ObservableObject {
     /// Switch the command source. Every connection is revalidated against the
     /// selected descriptor before any business request is allowed through.
     @discardableResult
-    func configure(instance: HarnessInstance?, allowLegacy: Bool) -> Bool {
-        let currentBinding = targetBindingKey ?? (self.allowLegacy ? "legacy" : nil)
-        let requestedBinding = instance?.bindingKey ?? (allowLegacy ? "legacy" : currentBinding)
+    func configure(instance: HarnessInstance?) -> Bool {
+        let currentBinding = targetBindingKey
+        let requestedBinding = instance?.bindingKey ?? currentBinding
         let sameInstance = targetInstance?.instanceId == instance?.instanceId
         let oldTargetStillRunning = targetInstance.map { Darwin.kill($0.pid, 0) == 0 } ?? false
         let parallelSameBinding = instance != nil
@@ -391,24 +397,17 @@ final class DSHPetCommandClient: ObservableObject {
             continuationWarning = "Harness 来源已更新，请重新选择工作区"
         }
 
-        self.allowLegacy = allowLegacy
-        sourceEnabled = instance != nil || allowLegacy
+        sourceEnabled = instance != nil
         if let instance {
             targetInstance = instance
             persistedTargetBindingKey = instance.bindingKey
             defaults.set(instance.bindingKey, forKey: Keys.targetBindingKey)
             socketPath = instance.commandSocketPath
             expectedInstanceID = instance.instanceId
-        } else if allowLegacy {
-            targetInstance = nil
-            persistedTargetBindingKey = "legacy"
-            defaults.set("legacy", forKey: Keys.targetBindingKey)
-            socketPath = legacySocketPath
-            expectedInstanceID = nil
         } else {
             // Keep the last target identity for a later rediscovery, while the
             // disabled state prevents any stale socket from being used.
-            socketPath = legacySocketPath
+            socketPath = ""
             expectedInstanceID = nil
         }
         capabilitiesValidated = false
@@ -514,10 +513,32 @@ final class DSHPetCommandClient: ObservableObject {
     /// ask for a new one before sending.
     func applyWorkspaces(_ decoded: [DSHPetWorkspace]) {
         workspaces = decoded
-        if let selectedWorkspaceID, decoded.contains(where: { $0.id == selectedWorkspaceID }) {
+        let selectedWorkspaceExists = selectedWorkspaceID.map { selected in
+            decoded.contains(where: { $0.id == selected })
+        } ?? false
+        if selectedWorkspaceExists {
             refreshBubbleDeck()
             return
         }
+
+        // The selected workspace disappeared (or was never selected): the
+        // bound Session cannot be a valid input target anymore. Clear the
+        // Session and its subscription before optionally auto-selecting the
+        // only remaining workspace.
+        let hadTarget = selectedWorkspaceID != nil
+            || sessionID != nil
+            || sessionSnapshot != nil
+            || hasPendingSubmission
+        if hadTarget {
+            selectedWorkspaceID = nil
+            defaults.removeObject(forKey: Keys.workspaceID)
+            presentedActiveTaskIDs = nil
+            clearSessionBinding()
+            clearFocusedTask()
+            submissionStatus = .idle
+            lastError = "当前工作区已不可用，已清除输入目标"
+        }
+
         if decoded.count == 1, let only = decoded.first {
             selectWorkspace(only.id)
         } else {
@@ -531,6 +552,10 @@ final class DSHPetCommandClient: ObservableObject {
         guard submissionStatus != .submitting else { return }
         guard workspaces.contains(where: { $0.id == id }) else { return }
         if selectedWorkspaceID != id {
+            guard pendingRequestID == nil, submissionStatus != .unconfirmed else {
+                lastError = "请先处理未确认的消息，再切换工作区"
+                return
+            }
             selectedWorkspaceID = id
             defaults.set(id, forKey: Keys.workspaceID)
             presentedActiveTaskIDs = nil
@@ -541,6 +566,24 @@ final class DSHPetCommandClient: ObservableObject {
 
     /// Forget only DSHPet's current binding. Existing Harness sessions are
     /// never deleted or cancelled.
+    /// Abandon the pending request and release the target/workspace guard.
+    /// If the draft is still exactly the message that was submitted and has no
+    /// attachments, it is cleared too; edited drafts are kept. The user chooses
+    /// this after checking Harness, and a message that did arrive may be
+    /// duplicated if it is sent again.
+    func discardPendingSubmission() {
+        guard submissionStatus != .submitting, hasPendingSubmission else { return }
+        let submittedText = pendingRequestText
+        invalidatePendingSubmission()
+        if let submittedText,
+           draft.trimmingCharacters(in: .whitespacesAndNewlines) == submittedText,
+           draftImages.isEmpty {
+            draft = ""
+        }
+        submissionStatus = .idle
+        lastError = nil
+    }
+
     func startNewSession() {
         guard submissionStatus != .submitting else { return }
         clearSessionBinding()
@@ -923,6 +966,11 @@ final class DSHPetCommandClient: ObservableObject {
                 case DSHPetCommandError.timedOut, DSHPetCommandError.unavailable:
                     submissionStatus = promptAttempted || promptMayHaveBeenSent
                         ? .unconfirmed : .failed("消息尚未发送，请在连接恢复后重试")
+                case DSHPetCommandError.server:
+                    // An explicit server rejection is definitive: do not keep
+                    // the pending request ID guarding target/workspace changes.
+                    submissionStatus = .failed(errorMessage(error))
+                    invalidatePendingSubmission()
                 default:
                     submissionStatus = .failed(errorMessage(error))
                 }
@@ -956,7 +1004,19 @@ final class DSHPetCommandClient: ObservableObject {
     }
 
     private func createBoundSession(workspaceID: String, expectedGeneration: Int, bindingGeneration: Int) async throws -> String {
-        let session = sessionID ?? "dsh-pet-session-\(UUID().uuidString.lowercased())"
+        let session: String
+        if let sessionID {
+            session = sessionID
+        } else if let pendingSessionID {
+            // The previous createSession may have succeeded on the host even if
+            // its response timed out; reuse the candidate id so the retry is
+            // idempotent instead of creating an orphan Session.
+            session = pendingSessionID
+        } else {
+            session = "dsh-pet-session-\(UUID().uuidString.lowercased())"
+            pendingSessionID = session
+            defaults.set(session, forKey: Keys.pendingSessionID)
+        }
         let response = try await request(
             action: "createSession",
             fields: ["workspaceId": workspaceID, "sessionId": session],
@@ -968,6 +1028,8 @@ final class DSHPetCommandClient: ObservableObject {
         guard let returnedSession = response["sessionId"] as? String, !returnedSession.isEmpty else {
             throw DSHPetCommandError.malformed
         }
+        pendingSessionID = nil
+        defaults.removeObject(forKey: Keys.pendingSessionID)
         sessionID = returnedSession
         defaults.set(returnedSession, forKey: Keys.sessionID)
         let subscribed = try await request(
@@ -1000,11 +1062,13 @@ final class DSHPetCommandClient: ObservableObject {
         dismissCandidates()
         sessionID = nil
         sessionSnapshot = nil
+        pendingSessionID = nil
         pendingRequestID = nil
         pendingRequestText = nil
         pendingRequestSignature = nil
         promptMayHaveBeenSent = false
         defaults.removeObject(forKey: Keys.sessionID)
+        defaults.removeObject(forKey: Keys.pendingSessionID)
         defaults.removeObject(forKey: Keys.requestID)
         defaults.removeObject(forKey: Keys.requestText)
         defaults.removeObject(forKey: Keys.requestSignature)
@@ -1228,6 +1292,10 @@ final class DSHPetCommandClient: ObservableObject {
                 }
                 capabilitiesValidated = true
                 capabilitiesAvailable = true
+                // A handshake on the new connection supersedes the previous
+                // transport error; otherwise the composer keeps showing
+                // "unavailable" after a successful reconnect.
+                lastError = nil
                 let supports = response["supports"] as? [String] ?? []
                 taskListAvailable = supports.contains("tasks") && supports.contains("subscribeTasks")
                 imageAttachmentsAvailable = supports.contains("imageAttachments")
@@ -1309,17 +1377,12 @@ final class DSHPetCommandClient: ObservableObject {
     }
 
     private func snapshotMatchesSelectedInstance(_ snapshot: MoodBridgeSnapshot) -> Bool {
-        guard let expectedInstanceID else { return true }
+        guard let expectedInstanceID else { return false }
         return snapshot.instanceId == expectedInstanceID
     }
 
     private func validateCapabilitiesInstance(_ value: Any?) -> Bool {
-        guard let targetInstance else {
-            // Legacy bridges predate instance metadata. A discovered
-            // descriptor must never be silently accepted as legacy, because
-            // that would make an HTTP/socket fallback cross origins.
-            return value == nil || allowLegacy
-        }
+        guard let targetInstance else { return false }
         guard let descriptor = value as? [String: Any],
               descriptor["instanceId"] as? String == targetInstance.instanceId,
               descriptor["statusSocketPath"] as? String == targetInstance.statusSocketPath,
@@ -1511,6 +1574,7 @@ final class DSHPetCommandClient: ObservableObject {
         let current = now()
         observeTaskTransitions(decoded, now: current)
         tasks = decoded
+        pruneReadMarkers(now: current)
         rebuildBubbleDeck(now: current)
         if let previousFocused,
            let currentFocused = focusedTask,
@@ -1532,6 +1596,17 @@ final class DSHPetCommandClient: ObservableObject {
         readMarkers[task.id] = TaskReadMarker(updatedAt: task.updatedAt, mood: task.mood)
         persistReadMarkers()
         rebuildBubbleDeck(now: now())
+    }
+
+    private func pruneReadMarkers(now: TimeInterval) {
+        let activeSessionIDs = Set(tasks.map(\.id))
+        let cutoff = (now - Self.readMarkerRetention) * 1_000
+        let retained = readMarkers.filter { sessionID, marker in
+            activeSessionIDs.contains(sessionID) || marker.updatedAt >= cutoff
+        }
+        guard retained.count != readMarkers.count else { return }
+        readMarkers = retained
+        persistReadMarkers()
     }
 
     private func persistReadMarkers() {

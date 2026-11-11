@@ -3,13 +3,11 @@ import Network
 
 enum TransportConnection: Equatable {
     case connected
-    case pluginDisabled
     case unavailable
 }
 
 enum TransportKind: String {
     case localSocket = "本地桥接"
-    case http = "HTTP 兼容"
     case disconnected = "未连接"
 }
 
@@ -24,95 +22,7 @@ protocol HarnessStateTransport: AnyObject {
     func disconnect()
 }
 
-/// HTTP transport for the DSH Pet status endpoint.
-@MainActor
-final class HTTPPollingTransport: HarnessStateTransport {
-    let kind: TransportKind = .http
-    private(set) var isConnected = false
-
-    var onStateChanged: ((MoodBridgeSnapshot) -> Void)?
-    var onConnectionChanged: ((TransportConnection) -> Void)?
-
-    private var baseURL: String
-    private var pollInterval: TimeInterval
-    private var requestTimeout: TimeInterval
-    private var pollingTask: Task<Void, Never>?
-
-    init(baseURL: String, pollInterval: TimeInterval, requestTimeout: TimeInterval) {
-        self.baseURL = baseURL
-        self.pollInterval = pollInterval
-        self.requestTimeout = requestTimeout
-    }
-
-    func updateConfiguration(baseURL: String, pollInterval: TimeInterval, requestTimeout: TimeInterval) {
-        self.baseURL = baseURL
-        self.pollInterval = pollInterval
-        self.requestTimeout = requestTimeout
-    }
-
-    func connect() {
-        guard pollingTask == nil else { return }
-        pollingTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.pollOnce()
-                guard !Task.isCancelled else { return }
-                let delay = UInt64(max(0.3, self?.pollInterval ?? 0.7) * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: delay)
-            }
-        }
-    }
-
-    func disconnect() {
-        pollingTask?.cancel()
-        pollingTask = nil
-        isConnected = false
-    }
-
-    private func pollOnce() async {
-        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "\(trimmed)/api/dsh-pet/status") else {
-            mark(.unavailable)
-            return
-        }
-
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: requestTimeout)
-        request.httpMethod = "GET"
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-            if http.statusCode == 404 {
-                guard let legacyURL = URL(string: "\(trimmed)/api/moodball/status") else { mark(.pluginDisabled); return }
-                var legacyRequest = URLRequest(url: legacyURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: requestTimeout)
-                legacyRequest.httpMethod = "GET"
-                legacyRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-                let legacyResult = try await URLSession.shared.data(for: legacyRequest)
-                guard let legacyHTTP = legacyResult.1 as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-                if legacyHTTP.statusCode == 404 { mark(.pluginDisabled); return }
-                guard legacyHTTP.statusCode == 200 else { throw URLError(.badServerResponse) }
-                let snapshot = try JSONDecoder().decode(MoodBridgeSnapshot.self, from: legacyResult.0)
-                onStateChanged?(snapshot)
-                mark(.connected)
-                return
-            }
-            guard http.statusCode == 200 else { throw URLError(.badServerResponse) }
-            let snapshot = try JSONDecoder().decode(MoodBridgeSnapshot.self, from: data)
-            onStateChanged?(snapshot)
-            mark(.connected)
-        } catch {
-            mark(.unavailable)
-        }
-    }
-
-    private func mark(_ status: TransportConnection) {
-        let connected = status == .connected
-        if isConnected != connected { isConnected = connected }
-        onConnectionChanged?(status)
-    }
-}
-
-/// New local transport. It observes newline-delimited JSON from the plugin's
+/// Local transport. It observes newline-delimited JSON from the plugin's
 /// Unix domain socket and never owns the Harness process or socket server.
 @MainActor
 final class LocalSocketTransport: HarnessStateTransport {
@@ -131,14 +41,9 @@ final class LocalSocketTransport: HarnessStateTransport {
     private var buffer = Data()
     private var hasValidatedInstance = false
 
-    init(socketPath: String = LocalSocketTransport.defaultSocketPath, expectedInstanceID: String? = nil) {
+    init(socketPath: String, expectedInstanceID: String? = nil) {
         self.socketPath = socketPath
         self.expectedInstanceID = expectedInstanceID
-    }
-
-    nonisolated static var defaultSocketPath: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Application Support/DSH Pet/dsh-pet.sock"
     }
 
     func connect() {

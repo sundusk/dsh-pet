@@ -55,21 +55,36 @@ final class PetSettingsVisibilityTests: XCTestCase {
         XCTAssertEqual(invalidDefaults.string(forKey: "dsh-pet.skin"), FloatingPetSkin.jingyuniang.rawValue)
     }
 
-    func testXiaoyuUsesWorkingAnimationForToolCalls() {
-        XCTAssertEqual(XiaoyuAnimation.animation(for: "jumping"), .waiting)
+    func testResetMoodColorsRestoresDefaults() throws {
+        let suite = "DSHPetTests.MoodColorReset.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("FF0000", forKey: "dsh-pet.moodColor.idle")
+
+        let settings = PetSettings(defaults: defaults)
+        XCTAssertEqual(colorToHex(try XCTUnwrap(settings.moodColors["idle"])), 0xFF0000)
+
+        settings.resetMoodColors()
+        XCTAssertEqual(colorToHex(try XCTUnwrap(settings.moodColors["idle"])), 0x60A5FA)
+        XCTAssertNil(defaults.string(forKey: "dsh-pet.moodColor.idle"))
+        XCTAssertEqual(colorToHex(try XCTUnwrap(PetSettings(defaults: defaults).moodColors["idle"])), 0x60A5FA)
     }
 
-    func testPetVisibilityMigratesAndCanBeShownAgain() {
+    func testXiaoyuUsesWorkingAnimationForToolCalls() {
+        XCTAssertEqual(XiaoyuAnimation.animation(for: "jumping"), .waiting)
+        XCTAssertEqual(XiaoyuAnimation.animation(for: "stopped"), .failed)
+    }
+
+    func testPetVisibilityPersistsAndCanBeShownAgain() {
         let suite = "DSHPetTests.PetVisibility.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(false, forKey: "dsh-pet.isBallVisible")
+        defaults.set(false, forKey: "dsh-pet.isPetVisible")
 
         let settings = PetSettings(defaults: defaults)
         XCTAssertFalse(settings.isPetVisible)
 
         settings.isPetVisible = true
         XCTAssertTrue(defaults.bool(forKey: "dsh-pet.isPetVisible"))
-        XCTAssertFalse(DSHPetShortcutAction.allCases.map(\.rawValue).contains("toggleBallVisibility"))
     }
 }

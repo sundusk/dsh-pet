@@ -32,6 +32,33 @@ final class DSHPetCommandClientTests: XCTestCase {
     }
 
     @MainActor
+    func testDiscardingPendingRequestUnblocksTargetSwitchAndClearsUnchangedDraft() {
+        let suite = "DSHPetCommandClientTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("request-pending", forKey: "dsh-pet.command.pendingRequestID")
+        defaults.set("草稿内容", forKey: "dsh-pet.command.pendingRequestText")
+        defaults.set("草稿内容", forKey: "dsh-pet.command.pendingRequestSignature")
+
+        let client = DSHPetCommandClient(defaults: defaults, socketPath: "/tmp/unused.sock")
+        client.draft = "草稿内容"
+        XCTAssertTrue(client.hasPendingSubmission)
+        XCTAssertEqual(client.submissionStatus, .unconfirmed)
+        XCTAssertTrue(client.targetSwitchBlocked)
+
+        client.discardPendingSubmission()
+
+        XCTAssertFalse(client.hasPendingSubmission)
+        XCTAssertFalse(client.targetSwitchBlocked)
+        XCTAssertEqual(client.draft, "", "an unchanged submitted draft is discarded with the request")
+        XCTAssertEqual(client.submissionStatus, .idle)
+        XCTAssertNil(client.lastError)
+        XCTAssertNil(defaults.string(forKey: "dsh-pet.command.pendingRequestID"))
+        XCTAssertNil(defaults.string(forKey: "dsh-pet.command.pendingRequestText"))
+        XCTAssertNil(defaults.string(forKey: "dsh-pet.command.pendingRequestSignature"))
+    }
+
+    @MainActor
     func testSelectedSkillSurvivesDraftRestoreAndClearsWhenRemoved() {
         let suite = "DSHPetCommandClientTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -433,6 +460,52 @@ final class DSHPetCommandClientTests: XCTestCase {
     }
 
     @MainActor
+    func testReadMarkersArePrunedForNonCurrentSessions() throws {
+        let suite = "DSHPetCommandClientTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let client = DSHPetCommandClient(
+            defaults: defaults,
+            socketPath: "/tmp/unused.sock",
+            now: { 3_000_000 }
+        )
+        let oldTask = task("old-session", updatedAt: 1)
+        client.applyTaskSummaries([oldTask], establishesBaseline: true)
+        client.applyTaskSummaries([])
+
+        let data = try XCTUnwrap(defaults.data(forKey: "dsh-pet.command.taskReadMarkers"))
+        let markers = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(markers["old-session"])
+    }
+
+    @MainActor
+    func testWorkspaceRemovalClearsStaleSessionBinding() {
+        let (client, cleanup) = makeClient(sessionID: "stale-session", workspace: "workspace")
+        defer { cleanup() }
+        client.applyWorkspaces([workspace("workspace")])
+        XCTAssertEqual(client.sessionID, "stale-session")
+
+        client.applyWorkspaces([])
+
+        XCTAssertNil(client.selectedWorkspaceID)
+        XCTAssertNil(client.sessionID)
+        XCTAssertNil(client.sessionSnapshot)
+        XCTAssertEqual(client.lastError, "当前工作区已不可用，已清除输入目标")
+    }
+
+    @MainActor
+    func testWorkspaceReplacementDoesNotKeepSessionFromRemovedWorkspace() {
+        let (client, cleanup) = makeClient(sessionID: "stale-session", workspace: "old")
+        defer { cleanup() }
+
+        client.applyWorkspaces([workspace("only")])
+
+        XCTAssertEqual(client.selectedWorkspaceID, "only")
+        XCTAssertNil(client.sessionID)
+        XCTAssertNil(client.sessionSnapshot)
+    }
+
+    @MainActor
     func testContinueTaskSwitchesToItsWorkspaceWhenDraftIsEmpty() {
         let (client, cleanup) = makeClient()
         defer { cleanup() }
@@ -467,10 +540,10 @@ final class DSHPetCommandClientTests: XCTestCase {
         let first = harnessInstance(id: "first", profile: "desktop")
         let second = harnessInstance(id: "second", profile: "web")
 
-        XCTAssertTrue(client.configure(instance: first, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: first))
         client.draft = "尚未发送"
 
-        XCTAssertFalse(client.configure(instance: second, allowLegacy: false))
+        XCTAssertFalse(client.configure(instance: second))
         XCTAssertEqual(client.draft, "尚未发送")
         XCTAssertEqual(client.lastError, "请先处理当前草稿或未确认请求，再切换 Harness 来源")
         XCTAssertEqual(client.targetBindingKey, first.bindingKey)
@@ -483,7 +556,7 @@ final class DSHPetCommandClientTests: XCTestCase {
         let instance = harnessInstance(id: "first", profile: "desktop")
         client.draft = "旧来源草稿"
 
-        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: instance))
         XCTAssertEqual(client.draft, "旧来源草稿")
         XCTAssertNil(client.selectedWorkspaceID)
         XCTAssertEqual(client.continuationWarning, "Harness 来源已更新，请重新选择工作区")
@@ -496,10 +569,10 @@ final class DSHPetCommandClientTests: XCTestCase {
         let first = harnessInstance(id: "first", profile: "desktop")
         let restarted = harnessInstance(id: "second", profile: "desktop")
 
-        XCTAssertTrue(client.configure(instance: first, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: first))
         client.draft = "保留草稿"
 
-        XCTAssertTrue(client.configure(instance: restarted, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: restarted))
         XCTAssertEqual(client.draft, "保留草稿")
         XCTAssertEqual(client.targetBindingKey, restarted.bindingKey)
     }

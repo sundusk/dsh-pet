@@ -50,7 +50,7 @@ export const name = 'dsh-pet'
 /** Services required before the status surface can mount. */
 export const inject = ['webServer', 'workspaceRegistry', 'sessionController', 'attachments']
 
-/** The mood the desktop app renders (same vocabulary as the web water ball). */
+/** The mood the desktop app renders. */
 export type DshPetMood =
   | 'idle'
   | 'waiting'
@@ -58,7 +58,6 @@ export type DshPetMood =
   | 'done'
   | 'failed'
   | 'stopped'
-  | 'waving'
   | 'authorizing'
   | 'questioning'
 
@@ -118,15 +117,16 @@ export function apply(ctx: Context): void {
   const sessionOperations = new Map<string, Promise<void>>()
   let taskSnapshot: DshPetTask[] = []
   let taskRefreshTimer: ReturnType<typeof setTimeout> | undefined
+  // Task cards only need a coarse refresh cadence. Rapid semantic events are
+  // coalesced, and streaming chunks are ignored by the caller.
+  const taskRefreshDelayMs = 500
   let refreshTaskSnapshot: ((timeoutMs?: number) => Promise<readonly DshPetTask[]>) | undefined
   let activeSessionId: string | undefined
   let commandBridge: CommandBridge | undefined
   const instance: HarnessInstanceDescriptor = createHarnessInstanceDescriptor(ctx)
   const instanceManifest = new HarnessInstanceManifest(
     instance,
-    process.env.DSH_PET_INSTANCE_DIRECTORY
-      ?? process.env.MOODBALL_INSTANCE_DIRECTORY
-      ?? instanceDiscoveryDirectory(),
+    process.env.DSH_PET_INSTANCE_DIRECTORY ?? instanceDiscoveryDirectory(),
   )
   let statusReady = false
   let commandReady = false
@@ -280,10 +280,10 @@ export function apply(ctx: Context): void {
       void refreshTaskSnapshot?.().catch(error => {
         console.warn(`[dsh-pet] task list refresh failed: ${String(error)}`)
       })
-    }, 150)
+    }, taskRefreshDelayMs)
   }
 
-  const publish = (state: SessionMoodState): void => {
+  const publish = (state: SessionMoodState, refreshTasks = true): void => {
     localBridge.publish()
     if (state.sessionId) {
       const snapshot = snapshotOf(state)
@@ -291,7 +291,7 @@ export function apply(ctx: Context): void {
         ? { ...snapshot, taskRunning: true, message: '无法确认任务状态，暂不可发送' }
         : snapshot)
     }
-    scheduleTaskRefresh()
+    if (refreshTasks) scheduleTaskRefresh()
   }
 
   // A transient mood (done / failed / stopped) holds for `ms` before reverting
@@ -310,7 +310,7 @@ export function apply(ctx: Context): void {
     }, ms)
   }
 
-  // Track each session independently. The legacy HTTP/socket snapshot follows
+  // Track each session independently. The global HTTP/socket snapshot follows
   // the most recently active session, while command subscribers receive only
   // the session they explicitly selected.
   ctx.on('session/event', (_session: Session, event: { type: string; data?: unknown }) => {
@@ -402,7 +402,10 @@ export function apply(ctx: Context): void {
       else if (kind === 'completed') setTransient(state, 'done', 2500)
       else if (kind !== undefined) setTransient(state, 'stopped', 3000)
     }
-    publish(state)
+    // Streaming chunks update the live pet/status immediately, but must not
+    // trigger a session-list query per token. Turn/tool/approval boundaries
+    // still refresh the task projection.
+    publish(state, event.type !== 'assistant/chunk')
   })
 
   ctx.on('session/created', () => { scheduleTaskRefresh() })
@@ -650,10 +653,48 @@ export function apply(ctx: Context): void {
     }
   }, 'dsh-pet: local bridges')
 
+  /**
+   * Named webServer routes bypass Harness's global authentication. Mirror the
+   * install-status boundary on every route that exposes or mutates local state:
+   * fail closed when the connection service is unavailable, and let its
+   * requestRejection return 401/403 before the handler runs.
+   */
+  const rejectUnauthorizedRequest = (
+    req: IncomingMessage,
+    res: ServerResponse,
+    unavailableBody: unknown,
+  ): boolean => {
+    let connection: { requestRejection?: (request: IncomingMessage) => number | undefined } | undefined
+    try {
+      connection = ctx.get('connection') as typeof connection
+    } catch {
+      json(res, 503, unavailableBody)
+      return true
+    }
+    if (typeof connection?.requestRejection !== 'function') {
+      json(res, 503, unavailableBody)
+      return true
+    }
+    let rejection: number | undefined
+    try {
+      rejection = connection.requestRejection(req)
+    } catch {
+      json(res, 503, unavailableBody)
+      return true
+    }
+    if (rejection !== undefined) {
+      res.writeHead(rejection)
+      res.end()
+      return true
+    }
+    return false
+  }
+
   const sessionOpenPendingRoute: WebRoute = {
     kind: 'exact',
     path: '/api/dsh-pet/session-open/pending',
     handler: (req: IncomingMessage, res: ServerResponse): void => {
+      if (rejectUnauthorizedRequest(req, res, { ok: false, error: 'authorization-unavailable' })) return
       if (req.method !== 'GET') {
         json(res, 405, { ok: false, error: 'method-not-allowed' })
         return
@@ -680,6 +721,7 @@ export function apply(ctx: Context): void {
     kind: 'exact',
     path: '/api/dsh-pet/session-open/ack',
     handler: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+      if (rejectUnauthorizedRequest(req, res, { ok: false, error: 'authorization-unavailable' })) return
       if (req.method !== 'POST') {
         json(res, 405, { ok: false, error: 'method-not-allowed' })
         return
@@ -722,56 +764,62 @@ export function apply(ctx: Context): void {
     },
   }
 
-  let installationCheck: ReturnType<typeof detectHostApp> | undefined
+  const installationStatusTtlMs = 45_000
+  let installationCache: {
+    status: Awaited<ReturnType<typeof detectHostApp>>
+    checkedAt: number
+  } | undefined
+  let installationCheck: {
+    promise: ReturnType<typeof detectHostApp>
+    fresh: boolean
+  } | undefined
+
+  const detectInstallationStatus = async (
+    fresh: boolean,
+  ): Promise<Awaited<ReturnType<typeof detectHostApp>>> => {
+    if (!fresh && installationCache !== undefined
+      && Date.now() - installationCache.checkedAt < installationStatusTtlMs) {
+      return installationCache.status
+    }
+    if (installationCheck !== undefined) {
+      const inFlight = installationCheck
+      const status = await inFlight.promise
+      // A manual probe still gets a new osascript run when an automatic probe
+      // was already in flight; concurrent manual requests share a fresh probe.
+      if (!fresh || inFlight.fresh) return status
+    }
+    const check = { promise: detectHostApp(), fresh }
+    installationCheck = check
+    try {
+      const status = await check.promise
+      installationCache = { status, checkedAt: Date.now() }
+      return status
+    } finally {
+      if (installationCheck === check) installationCheck = undefined
+    }
+  }
+
   const installationRoute: WebRoute = {
     kind: 'exact',
     path: '/api/dsh-pet/install-status',
     handler: async (req, res): Promise<void> => {
-      // Named webServer routes have no global authentication; use Harness's fence.
-      let connection: { requestRejection?: (request: IncomingMessage) => number | undefined } | undefined
-      try {
-        connection = ctx.get('connection') as typeof connection
-      } catch {
-        json(res, 503, { status: 'unknown' })
-        return
-      }
-      if (typeof connection?.requestRejection !== 'function') {
-        json(res, 503, { status: 'unknown' })
-        return
-      }
-      let rejection: number | undefined
-      try {
-        rejection = connection.requestRejection(req)
-      } catch {
-        json(res, 503, { status: 'unknown' })
-        return
-      }
-      if (rejection !== undefined) {
-        res.writeHead(rejection)
-        res.end()
-        return
-      }
+      if (rejectUnauthorizedRequest(req, res, { status: 'unknown' })) return
       if (req.method !== 'GET') {
         json(res, 405, { ok: false, error: 'method-not-allowed' })
         return
       }
-      installationCheck ??= detectHostApp().finally(() => { installationCheck = undefined })
-      const status = await installationCheck
+      const manual = new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1'
+      const status = await detectInstallationStatus(manual)
       res.setHeader('cache-control', 'no-store')
       json(res, 200, { status })
     },
   }
 
-  // Keep the former endpoint during the package rename so an older desktop
-  // app can finish its upgrade without losing the status bridge.
-  const legacyStatusRoute: WebRoute = { ...statusRoute, path: '/api/moodball/status' }
-
-  // Route is always live: unlike the web water ball there is no settings
-  // namespace, so nothing can take it down while the plugin is loaded.
+  // Route is always live: there is no settings namespace, so nothing can take
+  // it down while the plugin is loaded.
   ctx.effect(() => {
     const dispose = ctx.webServer.register(statusRoute)
     const disposeInstallation = ctx.webServer.register(installationRoute)
-    const disposeLegacy = ctx.webServer.register(legacyStatusRoute)
     const disposePending = ctx.webServer.register(sessionOpenPendingRoute)
     const disposeAck = ctx.webServer.register(sessionOpenAckRoute)
     return () => {
@@ -782,7 +830,6 @@ export function apply(ctx: Context): void {
         pending.resolve(false)
       }
       pendingSessionOpens.clear()
-      disposeLegacy()
       disposeInstallation()
       dispose()
     }

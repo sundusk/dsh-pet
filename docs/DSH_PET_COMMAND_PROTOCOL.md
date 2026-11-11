@@ -2,12 +2,22 @@
 
 本文档描述 `dsh-mac-pet` 与 DSH Pet.app 之间的本地协议。主通道是用户当前 macOS 账户下的 Unix Socket，插件拥有服务端，App 只连接和观察；协议不启动、停止或重启 DeepSeek Harness。会话跳转另有一个只传递 Session ID 的本地 HTTP 队列，不能创建、修改或提交任何 Agent 内容。
 
-## Socket
+## Socket 与实例发现
 
-- 路径：`~/Library/Application Support/DSH Pet/dsh-pet-command.sock`
+桥接插件为每个运行中的 Harness 进程创建独立的 Socket，并发布一个实例清单：
+
+- 状态 Socket：`/tmp/dsh-pet-<uid>/<instanceId>-s.sock`
+- 命令 Socket：`/tmp/dsh-pet-<uid>/<instanceId>-c.sock`
+- 实例清单：`~/Library/Application Support/DSH Pet/instances/<instanceId>.json`
 - 传输：Unix stream socket，UTF-8，NDJSON（一行一个 JSON 对象）
-- 权限：服务端创建后设为 `0600`
-- 状态接口：`GET /api/dsh-pet/status`，同时保留旧的 `GET /api/moodball/status`
+- 权限：Socket 创建后设为 `0600`，实例目录为 `0700`，清单文件为 `0600`
+- 状态接口：`GET /api/dsh-pet/status`
+
+实例清单的 `protocolVersion` 当前为 `1`，字段包括 `instanceId`、`kind`（`desktop` /
+`web` / `unknown`）、`profile`、`targetId`、`pid`、`startedAt`、`webURL`、
+`statusSocketPath` 和 `commandSocketPath`。`targetId` 是 Harness profile 的稳定哈希，
+不是路径本身；`webURL` 只接受回环地址。App 只读取当前用户拥有、PID 仍存活且两个
+Socket 类型正确的清单，不会跨用户或跨 Harness 猜测连接目标。
 
 ## 请求与响应
 
@@ -23,8 +33,26 @@
 `attachmentLimits`。支持图片的插件会在 `supports` 中包含 `imageAttachments`；限制包含
 `maxImageBytes`、`maxImagesPerMessage`、`maxMessageImageBytes`、像素/边长上限和允许的
 `mediaTypes`。`maxCommandBytes` 是命令 Socket 单行的传输上限，已包含部署允许的聚合图片
-Base64 膨胀和协议元数据余量。App 只有在命令 Socket 能力可用时显示发送能力；只有旧状态
-Socket/HTTP 时继续显示宠物状态并禁用发送。
+Base64 膨胀和协议元数据余量。响应中的 `instance` 是当前实例清单，App 必须核对
+`instanceId`、`statusSocketPath` 和 `commandSocketPath` 后才允许业务请求。App 只有在命令
+Socket 能力可用时显示发送能力；命令 Socket 不可用时只显示状态并禁用发送。
+
+### 可选能力
+
+`supports` 中可能还包含 `fileCandidates`、`skillCandidates` 和 `taskPreview`；未声明时
+App 不得调用对应动作。三个动作都要求 `workspaceId` 和属于该工作区的 `sessionId`：
+
+```json
+{"id":"r1","action":"fileCandidates","workspaceId":"...","sessionId":"...","query":"App"}
+{"id":"r1","action":"skillCandidates","workspaceId":"...","sessionId":"..."}
+{"id":"r1","action":"taskPreview","workspaceId":"...","sessionId":"..."}
+```
+
+- `fileCandidates` 返回 `{"candidates":[{"path":"...","kind":"file"|"directory"}]}`；
+- `skillCandidates` 返回 `{"skills":[{"name":"...","description":"...","conflict":false}]}`，
+  `conflict` 为 `true` 表示与 Harness 命令同名、App 应禁用该项；
+- `taskPreview` 返回 `{"status":"available","text":"..."}`，或
+  `empty` / `unsupported` / `migration-required`；预览只是最后一轮最终回复，不是摘要。
 
 ### `workspaces`
 
@@ -66,6 +94,10 @@ Socket/HTTP 时继续显示宠物状态并禁用发送。
 
 这两个 HTTP 端点只用于“打开已有 Session”，不携带 prompt、图片或设置，也不会启动新的 Agent 任务。浏览器半区不渲染 UI，只在 Harness 客户端加载时运行。
 
+与安装状态路由一致，这两个端点先经过 Harness 的 `connection.requestRejection` 鉴权：未授权请求返回
+401/403；鉴权服务不可用时返回 503 和 `{"ok":false,"error":"authorization-unavailable"}`，不会读取
+队列或接受确认。
+
 ### `prompt`
 
 ```json
@@ -104,8 +136,12 @@ ctx.sessionController.prompt({
 
 同一 Session 的创建和提交按顺序串行化；Harness 自身也按 `requestId` 去重。收到
 `accepted: true` 只代表消息进入 Agent inbox，不代表执行完成。超时由 App
-显示“提交结果未确认”，保留草稿与图片并沿用同一 `requestId` 重试。发送确认后，Harness
-持久化的附件由 Harness 管理；App 只能清理自己的私有草稿副本。
+显示“提交结果未确认”，保留草稿与图片并沿用同一 `requestId` 重试。App 也提供显式的“丢弃未确认”
+操作：它清除本地待确认标记；若草稿仍是原消息且没有附件会一并清空，编辑过的草稿保留。之后
+重发会使用新的 `requestId`，因此如果原消息其实已进入 Harness，可能产生重复。服务端明确拒绝（`ok:false` 且带错误）时不需要用户丢弃，App 会
+自动解除待确认。发送确认后，Harness
+持久化的附件由 Harness 管理；App 只能清理自己的私有草稿副本。当前 App 的输入界面未提供
+图片粘贴或截图附件入口，但桥接协议仍保留图片能力。
 
 ### `tasks`
 
@@ -170,7 +206,7 @@ App 展示所有已注册工作区的任务，不要求先在输入框中选定�
 
 ## 降级边界
 
-- 命令 Socket 不存在、旧插件或 Harness 未提供官方服务时：App 保留原有本地状态 Socket/HTTP 展示，输入框不可发送并给出原因。
+- 命令 Socket 不存在或 Harness 未提供官方服务时：App 保留状态展示，输入框不可发送并给出原因。
 - 工作区失效、Session 不存在或跨工作区发送被拒绝时：草稿保留，不切换到其他 Session。
 - `新建会话` 只清除 DSH Pet 的本地绑定；不删除、不取消旧 Harness Session。
 - 打开 Harness 只打开设置中的 Harness 首页；会话 ID可复制，不依赖未经官方验证的深链接。

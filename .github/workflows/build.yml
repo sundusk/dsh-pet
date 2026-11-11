@@ -29,6 +29,8 @@ jobs:
         run: pnpm typecheck
       - name: Build
         run: pnpm build
+      - name: Test bridge and installer
+        run: node --test tests/*.test.mjs
       - name: Check generated artifacts
         run: git diff --exit-code -- lib
 
@@ -39,5 +41,7 @@ jobs:
         uses: actions/checkout@v4
       - name: Build Swift app
         run: swift build -c release
+      - name: Test Swift app
+        run: swift test
       - name: Check shell scripts
         run: bash -n make-app.sh install.sh uninstall.sh run.sh

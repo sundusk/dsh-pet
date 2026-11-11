@@ -14,7 +14,7 @@ final class CommandSocketHandshakeTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
-        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: instance))
         client.start()
         defer { client.stop() }
         await server.waitForAction("workspaces")
@@ -36,6 +36,36 @@ final class CommandSocketHandshakeTests: XCTestCase {
     }
 
     @MainActor
+    func testServerRejectionClearsPendingRequestGuardAndKeepsDraft() async throws {
+        let path = "/tmp/dsh-pet-command-\(UUID().uuidString.prefix(8)).sock"
+        let instance = makeInstance(id: "selected", status: "/tmp/selected-status.sock", command: path)
+        let server = try CommandSocketServer(path: path, instance: instance, rejectPrompt: true)
+        defer { server.stop() }
+        let suite = "CommandSocketHandshakeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
+        XCTAssertTrue(client.configure(instance: instance))
+        client.start()
+        defer { client.stop() }
+        await server.waitForAction("workspaces")
+        for _ in 0..<100 where client.selectedWorkspaceID == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        client.draft = "服务端明确拒绝的消息"
+        client.submitDraft()
+        await server.waitForAction("prompt")
+        for _ in 0..<100 {
+            if case .failed = client.submissionStatus { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(client.submissionStatus, .failed("rejected by test"))
+        XCTAssertFalse(client.hasPendingSubmission)
+        XCTAssertEqual(client.draft, "服务端明确拒绝的消息")
+        XCTAssertNil(defaults.string(forKey: "dsh-pet.command.pendingRequestID"))
+    }
+
+    @MainActor
     func testPreviewUpdatesOnlyForFocusedSession() async throws {
         let path = "/tmp/dsh-pet-command-\(UUID().uuidString.prefix(8)).sock"
         let instance = makeInstance(id: "selected", status: "/tmp/selected-status.sock", command: path)
@@ -45,7 +75,7 @@ final class CommandSocketHandshakeTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
-        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: instance))
         client.start()
         await server.waitForAction("workspaces")
         let task = DSHPetTaskSummary(sessionID: "focused", workspaceID: "workspace", title: "测试", cwd: nil,
@@ -73,7 +103,7 @@ final class CommandSocketHandshakeTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
-        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: instance))
         client.start()
         await server.waitForAction("workspaces")
         for _ in 0..<100 where client.selectedWorkspaceID == nil {
@@ -102,7 +132,7 @@ final class CommandSocketHandshakeTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
-        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: instance))
         client.start()
         await server.waitForAction("workspaces")
         for _ in 0..<100 where client.selectedWorkspaceID == nil {
@@ -131,7 +161,7 @@ final class CommandSocketHandshakeTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
 
-        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: instance))
         client.start()
         await server.waitForAction("capabilities")
         try await Task.sleep(nanoseconds: 250_000_000)
@@ -158,7 +188,7 @@ final class CommandSocketHandshakeTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
 
-        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: instance))
         client.start()
         await server.waitForAction("workspaces")
         for _ in 0..<20 where client.workspaces.isEmpty {
@@ -177,10 +207,10 @@ final class CommandSocketHandshakeTests: XCTestCase {
         let client = DSHPetCommandClient(defaults: defaults, socketPath: "/tmp/unused.sock")
         let first = makeInstance(id: "first", status: "/tmp/first-status.sock", command: "/tmp/first-command.sock", pid: Int32(getpid()))
         let second = makeInstance(id: "second", status: "/tmp/second-status.sock", command: "/tmp/second-command.sock", pid: Int32(getpid()))
-        XCTAssertTrue(client.configure(instance: first, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: first))
         client.draft = "保留在第一个目标"
 
-        XCTAssertFalse(client.configure(instance: second, allowLegacy: false))
+        XCTAssertFalse(client.configure(instance: second))
         XCTAssertEqual(client.draft, "保留在第一个目标")
     }
 
@@ -195,7 +225,7 @@ final class CommandSocketHandshakeTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let client = DSHPetCommandClient(defaults: defaults, socketPath: path)
 
-        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: instance))
         client.start()
         await server.waitForAction("workspaces")
         for _ in 0..<20 where client.selectedWorkspaceID == nil {
@@ -207,10 +237,10 @@ final class CommandSocketHandshakeTests: XCTestCase {
 
         // Reconnect the same selected target while createSession is awaiting a
         // response. The old task must not subscribe or prompt on the new socket.
-        XCTAssertTrue(client.configure(instance: nil, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: nil))
         XCTAssertEqual(client.submissionStatus, .failed("消息尚未发送，请在连接恢复后重试"))
         XCTAssertEqual(client.draft, "等待来源切换")
-        XCTAssertTrue(client.configure(instance: instance, allowLegacy: false))
+        XCTAssertTrue(client.configure(instance: instance))
         server.releaseCreateSession()
         await server.waitForActionCount("capabilities", atLeast: 2)
         try await Task.sleep(nanoseconds: 300_000_000)
@@ -250,18 +280,20 @@ private final class CommandSocketServer: @unchecked Sendable {
     private let candidateSupport: Bool
     private let previewSupport: Bool
     private let disconnectOnPrompt: Bool
+    private let rejectPrompt: Bool
     private let createSessionRelease = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var clients: [Int32] = []
     private(set) var actions: [String] = []
 
-    init(path: String, instance: HarnessInstance, delayCreateSession: Bool = false, candidateSupport: Bool = false, previewSupport: Bool = false, disconnectOnPrompt: Bool = false) throws {
+    init(path: String, instance: HarnessInstance, delayCreateSession: Bool = false, candidateSupport: Bool = false, previewSupport: Bool = false, disconnectOnPrompt: Bool = false, rejectPrompt: Bool = false) throws {
         self.path = path
         self.instance = instance
         self.delayCreateSession = delayCreateSession
         self.candidateSupport = candidateSupport
         self.previewSupport = previewSupport
         self.disconnectOnPrompt = disconnectOnPrompt
+        self.rejectPrompt = rejectPrompt
         listener = try Self.makeListener(path: path)
         DispatchQueue.global().async { [weak self] in self?.acceptLoop() }
     }
@@ -315,6 +347,7 @@ private final class CommandSocketServer: @unchecked Sendable {
         while true {
             let client = Darwin.accept(listener, nil, nil)
             guard client >= 0 else { return }
+            Self.disableSigPipe(client)
             lock.withLock { clients.append(client) }
             DispatchQueue.global().async { [weak self] in self?.handle(client) }
         }
@@ -369,7 +402,12 @@ private final class CommandSocketServer: @unchecked Sendable {
                     if action == "createSession", delayCreateSession {
                         createSessionRelease.wait()
                     }
-                    if action == "createSession" {
+                    if action == "prompt", rejectPrompt {
+                        response = [
+                            "id": id, "ok": false,
+                            "error": ["code": "test/rejected", "message": "rejected by test"],
+                        ]
+                    } else if action == "createSession" {
                         response = ["id": id, "ok": true, "sessionId": request["sessionId"] ?? ""]
                     } else if action == "fileCandidates" {
                         response = ["id": id, "ok": true, "candidates": [["path": request["query"] ?? "", "kind": "file"]]]
@@ -386,6 +424,17 @@ private final class CommandSocketServer: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    private static func disableSigPipe(_ descriptor: Int32) {
+        var enabled: Int32 = 1
+        _ = setsockopt(
+            descriptor,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &enabled,
+            socklen_t(MemoryLayout<Int32>.size)
+        )
     }
 
     private static func makeListener(path: String) throws -> Int32 {

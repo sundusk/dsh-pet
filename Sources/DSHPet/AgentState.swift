@@ -41,17 +41,6 @@ enum AgentState: String, Codable, CaseIterable {
     }
 }
 
-/// Reserved multi-session shape. The first UI still presents the newest global
-/// snapshot, but the bridge does not have to change when session switching lands.
-struct AgentSessionState: Codable, Equatable, Identifiable {
-    let sessionId: String
-    let workspaceId: String?
-    let state: AgentState
-    let updatedAt: TimeInterval
-
-    var id: String { sessionId }
-}
-
 /// Version-tolerant payload shared by HTTP and the local Unix socket.
 struct MoodBridgeSnapshot: Codable, Equatable {
     let instanceId: String?

@@ -4,6 +4,18 @@ import XCTest
 
 @MainActor
 final class ComposerPanelSizeTests: XCTestCase {
+    func testExpandedComposerReservesRoomForAStatusRow() {
+        let withoutStatus = DSHPetComposerView.expandedComposerHeight(
+            inputHeight: DSHPetComposerView.composerInputMinimumHeight,
+            showsStatusLine: false
+        )
+        let withStatus = DSHPetComposerView.expandedComposerHeight(
+            inputHeight: DSHPetComposerView.composerInputMinimumHeight,
+            showsStatusLine: true
+        )
+        XCTAssertGreaterThanOrEqual(withStatus - withoutStatus, 24)
+    }
+
     func testComposerPanelSizesFollowBarPhase() {
         let composerSize = NSSize(width: 340, height: 106)
         let resting = AppDelegate.composerPanelSize(

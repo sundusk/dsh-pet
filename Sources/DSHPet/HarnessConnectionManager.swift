@@ -55,10 +55,6 @@ final class HarnessConnectionManager: ObservableObject {
     @Published private(set) var message: String?
     @Published private(set) var openingError: String?
 
-    var allowsLegacyFallback: Bool {
-        selectionID == "auto" && autoBindingKey == nil && instances.isEmpty
-    }
-
     /// Called before changing channels so the command client can protect pending input.
     var onTargetChange: ((HarnessInstance?) -> Bool)?
     var onRefresh: (() -> Void)?
@@ -66,11 +62,6 @@ final class HarnessConnectionManager: ObservableObject {
     nonisolated static var registryDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/DSH Pet/instances", isDirectory: true)
-    }
-
-    private static var legacyRegistryDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/MoodBall/instances", isDirectory: true)
     }
 
     private let directory: URL
@@ -112,10 +103,7 @@ final class HarnessConnectionManager: ObservableObject {
             isDiscovering = false
             onRefresh?()
         }
-        var discovered = Self.discover(in: directory)
-        if directory == Self.registryDirectory {
-            discovered += Self.discover(in: Self.legacyRegistryDirectory)
-        }
+        let discovered = Self.discover(in: directory)
         var byID: [String: HarnessInstance] = [:]
         for instance in discovered { byID[instance.id] = instance }
         instances = byID.values.sorted {
@@ -181,7 +169,7 @@ final class HarnessConnectionManager: ObservableObject {
             } else if selectionID != "auto" || autoBindingKey != nil {
                 message = "选定的 Harness 未运行。不会自动改连其他目标。"
             } else {
-                message = "未发现新版桥接实例。旧版连接只能显示来源未知；升级桥接插件后可选择目标。"
+                message = "未发现 Harness 实例；请确认桥接插件已在目标 Harness 中加载。"
             }
         } else {
             message = nil
@@ -221,24 +209,25 @@ final class HarnessConnectionManager: ObservableObject {
         return lstat(path, &info) == 0 && info.st_uid == getuid() && info.st_mode & S_IFMT == type
     }
 
-    func open(legacyWebAddress: String, legacyConnected: Bool = false) {
+    func open() {
         openingError = nil
         guard let instance = effectiveInstance else {
-            guard legacyConnected, allowsLegacyFallback,
-                  let url = HarnessInstance.safeWebURL(legacyWebAddress) else {
-                openingError = "请先选择可用的 Harness；旧版插件需升级后才能识别打开目标。"
-                return
-            }
-            if !NSWorkspace.shared.open(url) { openingError = "无法打开配置的 Harness 网页地址。" }
+            openingError = "请先选择可用的 Harness；未发现可打开的实例。"
             return
         }
         switch instance.kind {
         case .desktop:
-            guard let url = Self.desktopApplicationURL(for: instance.pid) else {
-                openingError = "未找到该实例所属的桌面应用，请重新检测连接。"
+            guard let appURL = Self.desktopApplicationURL(for: instance.pid) else {
+                // The Host may still expose a loopback Web UI even when the
+                // Desktop bundle cannot be located from the process ancestry.
+                guard let webURL = HarnessInstance.safeWebURL(instance.webURL, loopbackOnly: true) else {
+                    openingError = "未找到该实例所属的桌面应用，也没有可验证的网页地址。"
+                    return
+                }
+                if !NSWorkspace.shared.open(webURL) { openingError = "无法打开该 Harness 网页版。" }
                 return
             }
-            NSWorkspace.shared.openApplication(at: url, configuration: .init()) { [weak self] _, error in
+            NSWorkspace.shared.openApplication(at: appURL, configuration: .init()) { [weak self] _, error in
                 if error != nil {
                     Task { @MainActor in self?.openingError = "无法唤起选定的 Harness 桌面版。" }
                 }
@@ -250,7 +239,14 @@ final class HarnessConnectionManager: ObservableObject {
             }
             if !NSWorkspace.shared.open(url) { openingError = "无法打开该 Harness 网页版。" }
         case .unknown:
-            openingError = "此桥接未报告运行类型，无法可靠确定打开目标。请升级桥接插件或从原入口打开 Harness。"
+            // A local-socket connection can be fully usable even when the
+            // plugin could not classify the Host. Prefer its advertised Web UI
+            // over refusing to open anything.
+            guard let url = HarnessInstance.safeWebURL(instance.webURL, loopbackOnly: true) else {
+                openingError = "此 Harness 未报告运行类型，也没有可验证的网页地址；请从原入口打开。"
+                return
+            }
+            if !NSWorkspace.shared.open(url) { openingError = "无法打开该 Harness 网页版。" }
         }
     }
 

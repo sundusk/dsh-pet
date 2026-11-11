@@ -12,6 +12,14 @@ APP_DIR="dist/${APP_NAME}.app"
 ICON_SOURCE="Resources/dsh-pet-icon-1024.png"
 ICONSET_DIR=".build/DSHPet.iconset"
 
+# Single source of truth for the marketing version. CFBundleVersion remains a
+# separate build number.
+VERSION="$(/usr/bin/plutil -extract version raw -o - package.json 2>/dev/null || true)"
+if [ -z "$VERSION" ]; then
+	echo "无法从 package.json 读取 version" >&2
+	exit 1
+fi
+
 echo "==> swift build -c release --disable-sandbox"
 # --disable-sandbox：项目位于受限工作区（如 DSH 会话目录）时，
 # SwiftPM 的 sandbox-exec 会被外层沙箱拦截，需禁用内层沙箱
@@ -54,7 +62,7 @@ sips -z 1024 1024 "$ICON_SOURCE" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/
 iconutil -c icns "$ICONSET_DIR" -o "$APP_DIR/Contents/Resources/DSHPet.icns"
 cp Resources/ThirdPartyNotices.txt "$APP_DIR/Contents/Resources/ThirdPartyNotices.txt"
 
-cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
+cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -72,9 +80,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleIconFile</key>
 	<string>DSHPet</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.9.4</string>
+	<string>${VERSION}</string>
 	<key>CFBundleVersion</key>
-	<string>28</string>
+	<string>29</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
@@ -88,7 +96,7 @@ PLIST
 # 本地 ad-hoc 签名（未签名二进制在 arm64 上也能跑，签名更稳）
 codesign --force --sign - "$APP_DIR" 2>/dev/null || true
 
-if [ "${DSH_PET_SKIP_OPEN:-${MOODBALL_SKIP_OPEN:-0}}" != "1" ]; then
+if [ "${DSH_PET_SKIP_OPEN:-0}" != "1" ]; then
 	echo "==> 打开 $APP_DIR"
 	open "$APP_DIR"
 fi

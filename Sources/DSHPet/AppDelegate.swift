@@ -20,8 +20,6 @@ final class DSHPetPanel: NSPanel {
     private enum PositionKeys {
         static let x = "dsh-pet.ballPositionX"
         static let y = "dsh-pet.ballPositionY"
-        static let legacyX = "ballPositionX"
-        static let legacyY = "ballPositionY"
     }
 
     override var canBecomeKey: Bool { true }
@@ -35,12 +33,10 @@ final class DSHPetPanel: NSPanel {
     /// 尝试恢复上次拖拽保存的位置；仅当设置允许且窗口中心仍在某个屏幕可视区内才生效
     @discardableResult
     func restoreSavedPosition() -> Bool {
-        guard SettingsStore.shared.rememberPosition else { return false }
+        guard PetSettings.shared.rememberPosition else { return false }
         let defaults = UserDefaults.standard
-        let x = (defaults.object(forKey: PositionKeys.x) as? NSNumber
-            ?? defaults.object(forKey: PositionKeys.legacyX) as? NSNumber)?.doubleValue
-        let y = (defaults.object(forKey: PositionKeys.y) as? NSNumber
-            ?? defaults.object(forKey: PositionKeys.legacyY) as? NSNumber)?.doubleValue
+        let x = (defaults.object(forKey: PositionKeys.x) as? NSNumber)?.doubleValue
+        let y = (defaults.object(forKey: PositionKeys.y) as? NSNumber)?.doubleValue
         guard let x, let y else { return false }
         // 用「窗口中心」判断而非整窗相交：避免显示器变化后只留一截在屏边、球心在屏外
         let center = NSPoint(x: x + self.frame.width / 2, y: y + self.frame.height / 2)
@@ -52,7 +48,7 @@ final class DSHPetPanel: NSPanel {
 
     /// 拖拽结束时保存当前位置（受「记住位置」设置控制）
     func persistPosition() {
-        guard SettingsStore.shared.rememberPosition else { return }
+        guard PetSettings.shared.rememberPosition else { return }
         UserDefaults.standard.set(Double(frame.origin.x), forKey: PositionKeys.x)
         UserDefaults.standard.set(Double(frame.origin.y), forKey: PositionKeys.y)
         appLog.info("persistPosition -> \(Int(self.frame.origin.x)),\(Int(self.frame.origin.y))")
@@ -173,14 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(resetPositionRequested),
-            name: .waterballResetPosition,
-            object: nil
-        )
-        // 菜单栏「设置…」请求
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(toggleSettingsPanelNotification),
-            name: .waterballToggleSettings,
+            name: .dshPetResetPosition,
             object: nil
         )
         appLog.info("didFinishLaunching done")
@@ -226,15 +215,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupPanel() {
         let bubble = showStatusBubble ? model.bubblePresentation : nil
         let width = DSHPetView.panelWidth(
-            for: SettingsStore.shared.skin,
-            size: SettingsStore.shared.ballSize,
-            glowEnabled: SettingsStore.shared.glowEnabled,
+            for: PetSettings.shared.skin,
+            size: PetSettings.shared.ballSize,
+            glowEnabled: PetSettings.shared.glowEnabled,
             bubble: bubble
         )
         let height = DSHPetView.panelHeight(
-            for: SettingsStore.shared.skin,
-            size: SettingsStore.shared.ballSize,
-            glowEnabled: SettingsStore.shared.glowEnabled,
+            for: PetSettings.shared.skin,
+            size: PetSettings.shared.ballSize,
+            glowEnabled: PetSettings.shared.glowEnabled,
             bubble: bubble
         )
         let panel = DSHPetPanel(
@@ -259,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let hosting = NSHostingView(rootView: DSHPetView(
             model: model,
-            settings: SettingsStore.shared,
+            settings: PetSettings.shared,
             onOpenHarness: { [weak self] in self?.model.openHarness() }
         ))
         hosting.wantsLayer = true
@@ -271,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             positionAtBottomRight(panel)
         }
         DSHPetPanel.current = panel
-        if SettingsStore.shared.isPetVisible {
+        if PetSettings.shared.isPetVisible {
             panel.orderFrontRegardless()
         }
         self.panel = panel
@@ -294,7 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         context.isExcludedFromWindowsMenu = true
         context.contentView = NSHostingView(rootView: PetContextView { [weak self] in
             self?.dismissPetContext()
-            SettingsStore.shared.isPetVisible = false
+            PetSettings.shared.isPetVisible = false
         })
         petContextPanel = context
     }
@@ -426,18 +415,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         positionAtBottomRight(panel)
     }
 
-    @objc private func toggleSettingsPanelNotification() {
-        toggleSettingsPanel()
-    }
-
     // MARK: - 设置联动
 
     private func observeSettings() {
         // 皮肤、尺寸或光晕变化时更新窗口；底部锚点保持不动。
         settingsSink = Publishers.CombineLatest3(
-            SettingsStore.shared.$ballSize,
-            SettingsStore.shared.$skin,
-            SettingsStore.shared.$glowEnabled
+            PetSettings.shared.$ballSize,
+            PetSettings.shared.$skin,
+            PetSettings.shared.$glowEnabled
         )
             .receive(on: RunLoop.main)
             .sink { [weak self] newSize, skin, glowEnabled in
@@ -455,7 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 当前是否显示状态气泡（有可显示的卡组页且设置开关打开）
     private var showStatusBubble: Bool {
-        model.bubblePresentation != nil && SettingsStore.shared.showStatusBubble
+        model.bubblePresentation != nil && PetSettings.shared.showStatusBubble
     }
 
     /// 按可见内容计算面板大小，保留宠物的水平中心和底部位置。
@@ -474,7 +459,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let bubbleChanges: AnyPublisher<Void, Never> = model.$bubblePresentation
             .map { _ in () as Void }
             .eraseToAnyPublisher()
-        let bubbleSetting: AnyPublisher<Void, Never> = SettingsStore.shared.$showStatusBubble
+        let bubbleSetting: AnyPublisher<Void, Never> = PetSettings.shared.$showStatusBubble
             .map { _ in () as Void }
             .eraseToAnyPublisher()
         bubbleSink = Publishers.MergeMany(bubbleChanges, bubbleSetting)
@@ -483,9 +468,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self, let panel = self.panel else { return }
                 let bubble = self.showStatusBubble ? self.model.bubblePresentation : nil
                 let frame = self.panelFrame(
-                    ballSize: SettingsStore.shared.ballSize,
-                    skin: SettingsStore.shared.skin,
-                    glowEnabled: SettingsStore.shared.glowEnabled,
+                    ballSize: PetSettings.shared.ballSize,
+                    skin: PetSettings.shared.skin,
+                    glowEnabled: PetSettings.shared.glowEnabled,
                     bubble: bubble
                 )
                 if !frame.equalTo(panel.frame) {
@@ -520,7 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateHover() {
-        let settings = SettingsStore.shared
+        let settings = PetSettings.shared
         guard panel?.isVisible == true else { return }
         let mouse = NSEvent.mouseLocation
         let d = settings.ballSize
@@ -638,7 +623,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateComposerPanel() {
         guard let composerPanel else { return }
-        let settings = SettingsStore.shared
+        let settings = PetSettings.shared
         guard settings.isPetVisible else {
             composerPanel.orderOut(nil)
             model.closeTaskPanel()
@@ -688,7 +673,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateTaskPanel() {
         guard let taskPanel else { return }
-        let shouldShow = SettingsStore.shared.isPetVisible
+        let shouldShow = PetSettings.shared.isPetVisible
             && model.taskPanelMode != .closed
         guard shouldShow else {
             removeTaskPanelEventMonitors()
@@ -723,7 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { @MainActor in
                     guard let self, let taskPanel else { return }
                     self.isTaskPanelClosing = false
-                    if self.model.taskPanelMode == .closed || !SettingsStore.shared.isPetVisible {
+                    if self.model.taskPanelMode == .closed || !PetSettings.shared.isPetVisible {
                         taskPanel.orderOut(nil)
                     }
                     taskPanel.alphaValue = 1
@@ -837,7 +822,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // When there is no room below, sit above the visible pet (whose
             // sprite is bottom-anchored), not above the transparent hit area.
             y = min(
-                panel.frame.minY + SettingsStore.shared.ballSize + petControlGap,
+                panel.frame.minY + PetSettings.shared.ballSize + petControlGap,
                 visible.maxY - size.height - petControlGap
             )
         }
@@ -859,7 +844,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 宠物显示状态
 
     private func observeVisibility() {
-        visibilitySink = SettingsStore.shared.$isPetVisible
+        visibilitySink = PetSettings.shared.$isPetVisible
             .receive(on: RunLoop.main)
             .sink { [weak self] visible in
                 guard let self else { return }
@@ -888,7 +873,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = Self.makeStatusIcon()
         item.button?.imagePosition = .imageOnly
 
-        // 菜单内容：状态行 + 显示/隐藏 + 设置… + 退出（与旧 MenuBarContent 一致）
+        // 菜单内容：状态行 + 显示/隐藏 + 设置… + 退出
         let menu = NSMenu()
 
         statusHeaderItem = NSMenuItem(title: model.statusText, action: nil, keyEquivalent: "")
@@ -899,7 +884,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         togglePetMenuItem = makeShortcutMenuItem(
             action: .togglePetVisibility,
-            title: SettingsStore.shared.isPetVisible ? "隐藏宠物" : "显示宠物",
+            title: PetSettings.shared.isPetVisible ? "隐藏宠物" : "显示宠物",
             selector: #selector(togglePetVisibility)
         )
         menu.addItem(togglePetMenuItem!)
@@ -919,7 +904,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.menu = menu
 
         // mood 颜色 / 球显隐 / 状态文案变化 → 刷新图标与菜单
-        statusSink = Publishers.Merge(model.objectWillChange, SettingsStore.shared.objectWillChange)
+        statusSink = Publishers.Merge(model.objectWillChange, PetSettings.shared.objectWillChange)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 // objectWillChange 在属性写入前发出，推迟到下一轮再读，保证拿到新值
@@ -944,7 +929,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.toolTip = model.statusText
         item.button?.setAccessibilityLabel(model.statusText)
         statusHeaderItem?.title = model.statusText
-        togglePetMenuItem?.title = SettingsStore.shared.isPetVisible ? "隐藏宠物" : "显示宠物"
+        togglePetMenuItem?.title = PetSettings.shared.isPetVisible ? "隐藏宠物" : "显示宠物"
         applyMenuShortcuts()
     }
 
@@ -960,7 +945,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func applyMenuShortcuts() {
-        let settings = SettingsStore.shared
+        let settings = PetSettings.shared
         for action in DSHPetShortcutAction.allCases {
             let configuration = settings.shortcutConfiguration(for: action)
             let keyEquivalent = configuration.isEnabled && settings.shortcutConflict(for: action) == nil
@@ -975,7 +960,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func togglePetVisibility() {
-        SettingsStore.shared.isPetVisible.toggle()
+        PetSettings.shared.isPetVisible.toggle()
     }
 
     // MARK: - 全局快捷键
@@ -987,9 +972,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         hotKeySink = Publishers.CombineLatest3(
-            SettingsStore.shared.$globalHotKeyEnabled,
-            SettingsStore.shared.$globalHotKeyKeyCode,
-            SettingsStore.shared.$globalHotKeyModifiers
+            PetSettings.shared.$globalHotKeyEnabled,
+            PetSettings.shared.$globalHotKeyKeyCode,
+            PetSettings.shared.$globalHotKeyModifiers
         )
         .receive(on: RunLoop.main)
         .sink { [weak self] _, _, _ in
@@ -999,7 +984,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func applyGlobalHotKeyConfiguration() {
-        let settings = SettingsStore.shared
+        let settings = PetSettings.shared
         let result = globalHotKeyManager.update(settings.globalHotKeyConfiguration)
         switch result {
         case .success:
@@ -1011,8 +996,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showComposerFromGlobalHotKey() {
         // Show the selected display mode before focusing its composer.
-        if !SettingsStore.shared.isPetVisible {
-            SettingsStore.shared.isPetVisible = true
+        if !PetSettings.shared.isPetVisible {
+            PetSettings.shared.isPetVisible = true
         }
         model.openComposer(focus: true)
         NSApp.activate(ignoringOtherApps: true)
@@ -1234,7 +1219,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             p.isReleasedWhenClosed = false
             p.hidesOnDeactivate = false
             p.contentMinSize = NSSize(width: 980, height: 520)
-            p.appearance = NSAppearance(named: .aqua)
             p.setFrameAutosaveName("DSHPetSettingsSidebar")
             p.contentView = NSHostingView(rootView: SettingsPanelView(model: model))
             p.center()

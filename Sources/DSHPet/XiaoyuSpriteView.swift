@@ -41,8 +41,9 @@ enum XiaoyuAnimation: String, CaseIterable {
     case wave
 
     static let waveRepeatCount = 2
-    /// 以显示刷新率驱动帧切换，避免低频 Timeline 让离散精灵帧出现额外抖动。
-    static let renderInterval: TimeInterval = 1.0 / 60.0
+    /// Upper bound for redraw cadence. Individual animations render at their
+    /// shortest frame duration, which is well below 30 fps for these atlases.
+    static let renderInterval: TimeInterval = 1.0 / 30.0
 
     var row: Int {
         switch self {
@@ -106,6 +107,13 @@ enum XiaoyuAnimation: String, CaseIterable {
         frameDurations.reduce(0, +)
     }
 
+    /// Redraw no faster than the shortest frame in this animation. A 60 fps
+    /// TimelineView would otherwise re-evaluate the whole sprite view for no
+    /// visible change, which is wasteful for a menu-bar companion.
+    var minimumFrameInterval: TimeInterval {
+        max(Self.renderInterval, frameDurations.min() ?? Self.renderInterval)
+    }
+
     static var waveInteractionDuration: TimeInterval {
         wave.totalDuration * Double(waveRepeatCount)
     }
@@ -118,6 +126,9 @@ enum XiaoyuAnimation: String, CaseIterable {
         case "questioning": return .questioning
         case "done": return .done
         case "failed": return .failed
+        // Sprites have no dedicated stopped row; reuse the low/sad action
+        // instead of falling through to the disconnected pose.
+        case "stopped": return .failed
         default: return .disconnected
         }
     }
@@ -299,8 +310,25 @@ struct XiaoyuSpriteView: View {
         }
     }
 
+    private var frameInterval: TimeInterval {
+        if dragDirection != nil {
+            return max(XiaoyuAnimation.renderInterval, XiaoyuDragDirection.frameDuration)
+        }
+        let waveActive = XiaoyuAnimation.isWaveActive(
+            mood: mood,
+            interactionTriggeredAt: interactionTriggeredAt,
+            at: Date()
+        )
+        let animation = waveActive ? XiaoyuAnimation.wave : XiaoyuAnimation.animation(for: mood)
+        if animation == .idle, skin == .jingyuniangQ,
+           let shortestIdleFrame = CodexSpriteAtlas.jingyuniangQIdleFrameDurations.min() {
+            return max(XiaoyuAnimation.renderInterval, shortestIdleFrame)
+        }
+        return animation.minimumFrameInterval
+    }
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: XiaoyuAnimation.renderInterval, paused: reduceMotion)) { timeline in
+        TimelineView(.animation(minimumInterval: frameInterval, paused: reduceMotion)) { timeline in
             let selection = frameSelection(at: reduceMotion ? stateStartedAt : timeline.date)
 
             ZStack(alignment: .bottom) {
@@ -326,7 +354,7 @@ struct XiaoyuSpriteView: View {
                         .interpolation(.none)
                         .frame(width: size * CGFloat(XiaoyuSpriteAtlas.cellWidth) / CGFloat(XiaoyuSpriteAtlas.cellHeight), height: size)
                         .scaleEffect(selection.displayScale, anchor: .bottom)
-                        .opacity(mood == "disconnected" ? 0.65 : 1)
+                        .opacity(["disconnected", "unreachable"].contains(mood) ? 0.65 : 1)
                 } else {
                     Image(systemName: "person.crop.circle.badge.exclamationmark")
                         .font(.system(size: size * 0.5))

@@ -19,21 +19,28 @@ function apply(ctx) {
       // The desktop shell spawns its Host locally and exclusively forwards this origin to it.
       const localDesktop = window.location?.protocol === 'dsh-app:' && window.location?.hostname === 'app'
         && typeof window.dshDesktopBoot?.ready === 'function'
-      let hostStatus = 'unknown'
+      let detection = { status: 'unknown', checking: false, checked: false }
       let stopped = false
       let requestId = 0
       const listeners = new Set()
       const subscribe = listener => { listeners.add(listener); return () => listeners.delete(listener) }
-      const refreshStatus = async () => {
+      const refreshStatus = async (manual = false) => {
+        if (detection.checking) return
         const current = ++requestId
+        if (manual) {
+          detection = { ...detection, checking: true, checked: false }
+          for (const listener of listeners) listener()
+        }
         let next = 'unknown'
         try {
-          const response = await fetch(new URL('api/dsh-pet/install-status', document.baseURI).href, { cache: 'no-store', headers: { accept: 'application/json' } })
+          const statusURL = new URL('api/dsh-pet/install-status', document.baseURI)
+          if (manual) statusURL.searchParams.set('refresh', '1')
+          const response = await fetch(statusURL.href, { cache: 'no-store', headers: { accept: 'application/json' } })
           const payload = response.ok ? await response.json() : null
           if (['installed', 'not-found'].includes(payload?.status)) next = payload.status
         } catch { /* Keep the installation entry available when detection fails. */ }
-        if (stopped || current !== requestId || next === hostStatus) return
-        hostStatus = next
+        if (stopped || current !== requestId || (!manual && next === detection.status)) return
+        detection = { status: next, checking: false, checked: manual }
         for (const listener of listeners) listener()
       }
 
@@ -49,7 +56,7 @@ function apply(ctx) {
       }
 
       function InstallPage() {
-        const status = React.useSyncExternalStore(subscribe, () => hostStatus)
+        const { status, checking, checked } = React.useSyncExternalStore(subscribe, () => detection)
         const hostLabel = status === 'installed' ? '已检测到 DSH Pet' : status === 'not-found' ? '未检测到 DSH Pet' : '无法确认'
         const section = { marginTop: '28px' }
         return h('main', { style: { height: '100%', overflow: 'auto', boxSizing: 'border-box', color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-base)' } },
@@ -66,12 +73,14 @@ function apply(ctx) {
                 h('li', null, '将 DSH Pet.app 拖入「应用程序」文件夹，然后打开。'),
                 h('li', null, '在桌宠的「设置」→「Harness 连接」中检查连接状态。'),
                 h('li', null, '如果 Harness 提示需要重启才能加载插件，请在当前任务完成后重启。')),
-              h('p', null, '首次打开时，如果 macOS 阻止运行，请根据系统提示在「系统设置」→「隐私与安全性」中处理。')),
+              h('p', null, '首次打开时，如果 macOS 提示无法验证开发者，请打开「系统设置」→「隐私与安全性」，向下找到 DSH Pet，点击「仍要打开」，并在提示中确认打开。')),
             h('section', { style: section },
               h('h2', { style: { fontSize: '16px' } }, '安装状态'),
-              h('p', { role: 'status' }, `${localDesktop ? '本机' : 'Harness 所在设备'}：${hostLabel}。`),
+              h('p', { role: 'status' }, checking ? '正在检测…' : `${checked ? '检测完成。' : ''}${localDesktop ? '本机' : 'Harness 所在设备'}：${hostLabel}。`),
               localDesktop ? null : h('p', null, '无法确认你当前使用的设备是否就是 Harness 所在设备，请在本机检查 DSH Pet 是否已安装。'),
-              h('button', { type: 'button', onClick: () => { void refreshStatus() } }, '重新检测'))))
+              h('button', { type: 'button', disabled: checking, onClick: () => { void refreshStatus(true) } }, checking ? '检测中…' : '重新检测'),
+              status === 'installed' && !checking && typeof scope.layout?.selectPanel === 'function'
+                ? h('button', { type: 'button', style: { marginLeft: '12px' }, onClick: () => scope.layout.selectPanel(null) }, '完成，返回会话') : null)))
       }
 
       scope.slots.inject('main', () => scope.slots.register({ name: 'main', key: panelId }, InstallPage))
@@ -80,7 +89,7 @@ function apply(ctx) {
         const panelInfo = scope.layout?.panelInfo
         const canTrackPanel = typeof panelInfo?.getSnapshot === 'function' && typeof panelInfo?.subscribe === 'function'
         const update = () => {
-          const visible = !localDesktop || hostStatus !== 'installed' || !canTrackPanel || panelInfo.getSnapshot().activePanelId === panelId
+          const visible = !localDesktop || detection.status !== 'installed' || !canTrackPanel || panelInfo.getSnapshot().activePanelId === panelId
           if (visible && unregister === undefined) unregister = scope.slots.register({ name: 'sidebar.panellist', id: panelId, order: 90, label: '安装桌宠' }, InstallIcon)
           else if (!visible && unregister !== undefined) { unregister(); unregister = undefined }
         }
